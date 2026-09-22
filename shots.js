@@ -62,6 +62,8 @@
             // boss
             this.boss       = null
             this.bossActive = false
+            this.bossCount  = 0
+            this.nextBossAt = 5
 
             // combo
             this.combo           = 0
@@ -143,6 +145,7 @@
             if (!Game.paused) {
                 Game.pause()
                 Game.audio.pause()
+                Game.video.pause()
             } else {
                 if (Game.isGameOver) {
                     Game.init()
@@ -161,7 +164,6 @@
                     Game.player.shoot()
                     Game.oneShot = true
                 }
-                if (Game.isGameOver) Game.init()
                 e.preventDefault()
             }
         },
@@ -183,8 +185,8 @@
         },
 
         invincibleMode: function (ms) {
-            this.player.invincible = true
-            setTimeout(() => { Game.player.invincible = false }, ms)
+            this.player.invincible      = true
+            this.player.invincibleTimer = ms / 1000
         },
 
         collision: function (a, b) {
@@ -211,8 +213,10 @@
             this.speedMultiplier = 1 + (this.difficulty - 1) * 0.1
             this.playLevelUpSound()
 
-            // every 5 levels: boss wave
-            if (this.difficulty % 5 === 0) {
+            // boss interval shrinks each wave: 5 → 4 → 3 → 2 → 2 → ...
+            if (this.difficulty === this.nextBossAt) {
+                this.bossCount++
+                this.nextBossAt += Math.max(2, 5 - this.bossCount)
                 new Boss()
                 return
             }
@@ -296,6 +300,34 @@
             kick.start(); kick.stop(ac.currentTime + 0.4)
         },
 
+        playHitSound: function () {
+            const ac = this._ac(); if (!ac) return
+            // tono descendente (impacto)
+            const osc = ac.createOscillator(), gain = ac.createGain()
+            osc.connect(gain); gain.connect(ac.destination)
+            osc.type = 'sawtooth'
+            osc.frequency.setValueAtTime(260, ac.currentTime)
+            osc.frequency.exponentialRampToValueAtTime(38, ac.currentTime + 0.32)
+            gain.gain.setValueAtTime(0.38, ac.currentTime)
+            gain.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + 0.36)
+            osc.start(); osc.stop(ac.currentTime + 0.36)
+            // burst de ruido corto (crujido)
+            const bufSize = Math.floor(ac.sampleRate * 0.12)
+            const buf = ac.createBuffer(1, bufSize, ac.sampleRate)
+            const data = buf.getChannelData(0)
+            for (let i = 0; i < bufSize; i++) data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / bufSize, 1.8)
+            const src = ac.createBufferSource()
+            src.buffer = buf
+            const filter = ac.createBiquadFilter()
+            filter.type = 'bandpass'
+            filter.frequency.setValueAtTime(500, ac.currentTime)
+            const ng = ac.createGain()
+            ng.gain.setValueAtTime(1.2, ac.currentTime)
+            ng.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + 0.12)
+            src.connect(filter); filter.connect(ng); ng.connect(ac.destination)
+            src.start()
+        },
+
         playPowerUpSound: function (type) {
             const ac = this._ac(); if (!ac) return
             switch (type) {
@@ -343,16 +375,12 @@
         },
 
         drawVideo: function () {
-            if (this.video.paused) {
-                this.video.play().catch(() => {})
-                this.audio.play().catch(() => {})
-            }
+            if (this.video.paused) this.video.play().catch(() => {})
             this.ctx.drawImage(this.video, 0, 0, this.c.width, this.c.height)
         },
 
         gameOver: function () {
             this.isGameOver = true
-            this.clear()
             this.pause()
             this.audio.pause()
 
@@ -362,20 +390,124 @@
                 localStorage.setItem('warInSpaceHS', this.highScore)
             }
 
-            const msg1 = "Fin del juego"
-            const msg2 = "Puntaje: " + this.score
-            const msg3 = isNewRecord ? "¡NUEVO RECORD!" : "Mejor: " + this.highScore
-            const msg4 = "Haga clic o presione la barra espaciadora para volver a jugar"
+            const ctx = this.ctx
+            const W   = this.c.width
+            const H   = this.c.height
+            const cx  = W / 2
+            const cy  = H / 2
 
-            this.ctx.font      = "bold 30px Lato, sans-serif"
-            this.ctx.fillStyle = "white"
-            this.ctx.fillText(msg1, this.c.width / 2 - this.ctx.measureText(msg1).width / 2, this.c.height / 2 - 60)
-            this.ctx.fillText(msg2, this.c.width / 2 - this.ctx.measureText(msg2).width / 2, this.c.height / 2 - 15)
-            this.ctx.fillStyle = isNewRecord ? "#FFD700" : "#05FAFF"
-            this.ctx.fillText(msg3, this.c.width / 2 - this.ctx.measureText(msg3).width / 2, this.c.height / 2 + 25)
-            this.ctx.fillStyle = "white"
-            this.ctx.font      = "bold 16px Lato, sans-serif"
-            this.ctx.fillText(msg4, this.c.width / 2 - this.ctx.measureText(msg4).width / 2, this.c.height / 2 + 60)
+            // dark overlay
+            ctx.fillStyle = 'rgba(0,0,0,0.75)'
+            ctx.fillRect(0, 0, W, H)
+
+            // vignette — dark space feel
+            const vig = ctx.createRadialGradient(cx, cy, H * 0.1, cx, cy, H * 0.85)
+            vig.addColorStop(0, 'rgba(0,10,20,0)')
+            vig.addColorStop(1, 'rgba(0,0,0,0.62)')
+            ctx.fillStyle = vig
+            ctx.fillRect(0, 0, W, H)
+
+            // panel — misma estética que el HUD
+            const pw = Math.min(400, W - 60)
+            const ph = 278
+            const px = cx - pw / 2
+            const py = cy - ph / 2 - 10
+
+            this._roundRect(px, py, pw, ph, 14)
+            ctx.fillStyle   = 'rgba(0,0,0,0.82)'
+            ctx.fill()
+            ctx.strokeStyle = isNewRecord ? 'rgba(255,215,0,0.45)' : 'rgba(0,225,255,0.35)'
+            ctx.lineWidth   = 1.5
+            ctx.stroke()
+
+            // top accent line — cian como el panel PUNTAJE
+            ctx.save()
+            ctx.strokeStyle = isNewRecord ? '#FFD700' : 'rgba(0,225,255,0.85)'
+            ctx.lineWidth   = 2
+            ctx.shadowColor = ctx.strokeStyle
+            ctx.shadowBlur  = 10
+            ctx.beginPath()
+            ctx.moveTo(px + 22, py + 1)
+            ctx.lineTo(px + pw - 22, py + 1)
+            ctx.stroke()
+            ctx.restore()
+
+            // "GAME OVER" title — blanco con glow cian
+            ctx.save()
+            ctx.textAlign   = 'center'
+            ctx.font        = 'bold 58px Lato, sans-serif'
+            ctx.fillStyle   = '#ffffff'
+            ctx.shadowColor = 'rgba(0,225,255,0.75)'
+            ctx.shadowBlur  = 32
+            ctx.fillText('GAME OVER', cx, py + 73)
+            ctx.restore()
+
+            // divider — cian tenue
+            ctx.save()
+            ctx.strokeStyle = 'rgba(0,225,255,0.12)'
+            ctx.lineWidth   = 1
+            ctx.beginPath(); ctx.moveTo(px + 28, py + 92); ctx.lineTo(px + pw - 28, py + 92); ctx.stroke()
+            ctx.restore()
+
+            // score label — mismo estilo que etiqueta HUD
+            ctx.save()
+            ctx.textAlign = 'center'
+            ctx.font      = 'bold 8px Lato, sans-serif'
+            ctx.fillStyle = 'rgba(0,225,255,0.55)'
+            ctx.fillText('S C O R E', cx, py + 117)
+            ctx.restore()
+
+            // score value — igual al HUD
+            ctx.save()
+            ctx.textAlign   = 'center'
+            ctx.font        = 'bold 46px Lato, sans-serif'
+            ctx.fillStyle   = '#ffffff'
+            ctx.shadowColor = 'rgba(0,225,255,0.45)'
+            ctx.shadowBlur  = 10
+            ctx.fillText(this.score.toLocaleString(), cx, py + 163)
+            ctx.restore()
+
+            // record — igual al panel MEJOR PUNTAJE
+            ctx.save()
+            ctx.textAlign = 'center'
+            if (isNewRecord) {
+                ctx.font        = 'bold 20px Lato, sans-serif'
+                ctx.fillStyle   = '#FFD700'
+                ctx.shadowColor = '#FFD700'
+                ctx.shadowBlur  = 22
+                ctx.fillText('★   ¡NUEVO RÉCORD!   ★', cx, py + 199)
+            } else {
+                ctx.font        = 'bold 12px Lato, sans-serif'
+                ctx.fillStyle   = 'rgba(255,215,0,0.55)'
+                ctx.fillText('RÉCORD  ' + this.highScore.toLocaleString(), cx, py + 199)
+            }
+            ctx.restore()
+
+            // divider
+            ctx.save()
+            ctx.strokeStyle = 'rgba(0,225,255,0.12)'
+            ctx.lineWidth   = 1
+            ctx.beginPath(); ctx.moveTo(px + 28, py + 217); ctx.lineTo(px + pw - 28, py + 217); ctx.stroke()
+            ctx.restore()
+
+            // botón de reinicio — cian igual al HUD
+            const bw = pw - 64
+            const bh = 38
+            const bx = cx - bw / 2
+            const by = py + ph - 52
+            this._roundRect(bx, by, bw, bh, 8)
+            ctx.fillStyle   = 'rgba(0,225,255,0.07)'
+            ctx.fill()
+            ctx.strokeStyle = 'rgba(0,225,255,0.35)'
+            ctx.lineWidth   = 1
+            ctx.stroke()
+            ctx.save()
+            ctx.textAlign    = 'center'
+            ctx.textBaseline = 'middle'
+            ctx.font         = 'bold 12px Lato, sans-serif'
+            ctx.fillStyle    = 'rgba(255,255,255,0.75)'
+            ctx.fillText('HAZ CLIC PARA VOLVER A JUGAR', cx, by + bh / 2)
+            ctx.restore()
         },
 
         // ── HUD helpers ──────────────────────────────────────────
@@ -458,7 +590,7 @@
             ctx.save()
             ctx.font      = 'bold 8px Lato, sans-serif'
             ctx.fillStyle = 'rgba(0,225,255,0.55)'
-            ctx.fillText('PUNTAJE', 18, 22)
+            ctx.fillText('SCORE', 18, 22)
             ctx.font        = 'bold 20px Lato, sans-serif'
             ctx.fillStyle   = '#ffffff'
             ctx.shadowColor = 'rgba(0,225,255,0.5)'
@@ -482,7 +614,7 @@
             ctx.textAlign   = 'right'
             ctx.font        = 'bold 8px Lato, sans-serif'
             ctx.fillStyle   = 'rgba(255,215,0,0.55)'
-            ctx.fillText('MEJOR PUNTAJE', W - 18, 24)
+            ctx.fillText('RÉCORD', W - 18, 24)
             ctx.font        = 'bold 18px Lato, sans-serif'
             ctx.fillStyle   = '#FFD700'
             ctx.shadowColor = 'rgba(255,215,0,0.45)'
@@ -679,11 +811,12 @@
         this.movingRight  = false
         this.speed        = 5
         this.shootCooldown = 0
-        this.invincible   = false
-        this.rapidFire    = 0
-        this.tripleShot   = 0
-        this.shield       = 0
-        this.bombFlash    = 0
+        this.invincible      = false
+        this.invincibleTimer = 0
+        this.rapidFire       = 0
+        this.tripleShot      = 0
+        this.shield          = 0
+        this.bombFlash       = 0
         this.trail        = []
         this.image        = new Image()
         this.image.src    = 'img/nave.png'
@@ -691,6 +824,7 @@
 
     Player.prototype.die = function () {
         if (Game.life < Game.maxLives) {
+            Game.playHitSound()
             Game.invincibleMode(2000)
             Game.life++
             Game.shakeTimer = 0.3
@@ -738,6 +872,17 @@
         if (this.shield     > 0) this.shield     -= Game.dt
         if (this.bombFlash  > 0) this.bombFlash  -= Game.dt
 
+        // invincibility: shield takes priority; damage/unpause use invincibleTimer
+        if (this.shield > 0) {
+            this.invincible      = true
+            this.invincibleTimer = 0
+        } else if (this.invincibleTimer > 0) {
+            this.invincibleTimer -= Game.dt
+            if (this.invincibleTimer <= 0) { this.invincibleTimer = 0; this.invincible = false }
+        } else {
+            this.invincible = false
+        }
+
         this.shootCooldown -= Game.dt
         if (Game.shooting && this.shootCooldown <= 0 && (!this.invincible || this.shield > 0)) this.shoot()
 
@@ -772,25 +917,69 @@
     // BULLET (player)
     // ============================================================
     let Bullet = function (x, vx) {
-        this.width  = 8
-        this.height = 20
+        this.width  = 6
+        this.height = 24
         this.x      = x
         this.y      = Game.player.y
         this.vx     = vx || 0
         this.vy     = 7 * Game.speedMultiplier
+        this.triple = Game.player.tripleShot > 0
         this.index  = Game.bulletIndex
-        this.color  = "orange"
+        this.phase  = Math.random() * Math.PI * 2
     }
 
     Bullet.prototype.draw = function () {
-        Game.ctx.save()
-        Game.ctx.shadowBlur  = 10
-        Game.ctx.shadowColor = "orange"
-        Game.ctx.fillStyle   = this.color
-        Game.ctx.beginPath()
-        Game.ctx.arc(this.x, this.y, this.width / 2, 0, Math.PI * 2)
-        Game.ctx.fill()
-        Game.ctx.restore()
+        const ctx  = Game.ctx
+        const cx   = this.x
+        const y    = this.y
+        const h    = this.height
+        const w    = this.width
+
+        // triple shot: slightly purple-white tint; single: orange-yellow
+        const glowColor = this.triple ? '#CC88FF' : '#FFA020'
+        const bodyColor = this.triple ? 'rgba(180,80,255,0.92)' : 'rgba(255,140,0,0.92)'
+        const coreColor = this.triple ? '#F0E0FF' : '#FFF0A0'
+
+        const pulse    = Math.sin(Game.elapsedTime * 16 + this.phase)
+        const glowBlur = 12 + pulse * 2.5
+
+        ctx.save()
+
+        // rotate triple shot bullets to face their diagonal travel direction
+        if (this.vx !== 0) {
+            const angle = Math.atan2(-this.vy, this.vx) + Math.PI / 2
+            ctx.translate(cx, y + h / 2)
+            ctx.rotate(angle)
+            ctx.translate(-cx, -(y + h / 2))
+        }
+
+        ctx.shadowColor = glowColor
+        ctx.shadowBlur  = glowBlur
+
+        // teardrop: tip at top (direction of travel = up), wide tail at bottom
+        const tailW = w * 0.85
+        const tipW  = w * 0.07
+        ctx.beginPath()
+        ctx.moveTo(cx,              y)
+        ctx.lineTo(cx + tipW,       y + h * 0.12)
+        ctx.lineTo(cx + tailW / 2,  y + h)
+        ctx.lineTo(cx - tailW / 2,  y + h)
+        ctx.lineTo(cx - tipW,       y + h * 0.12)
+        ctx.closePath()
+        ctx.fillStyle = bodyColor
+        ctx.fill()
+
+        // bright core streak
+        ctx.shadowBlur  = glowBlur * 0.4
+        ctx.strokeStyle = coreColor
+        ctx.lineWidth   = Math.max(1, w * 0.18)
+        ctx.lineCap     = 'round'
+        ctx.beginPath()
+        ctx.moveTo(cx, y + h * 0.07)
+        ctx.lineTo(cx, y + h * 0.83)
+        ctx.stroke()
+
+        ctx.restore()
     }
 
     Bullet.prototype.update = function () {
@@ -884,7 +1073,8 @@
         const ptColor = Game.combo >= 5 ? '#FF4500' : Game.combo >= 3 ? '#FFD700' : '#fff'
         new FloatingText(this.x + this.width / 2, this.y, '+' + points, ptColor)
 
-        if (Math.random() < 0.2) new PowerUp(this.x + this.width / 2, this.y + this.height / 2)
+        if (Math.random() < 0.2 && !Game.bossActive) new PowerUp(this.x + this.width / 2, this.y + this.height / 2)
+
 
         Game.sfxExplosion.currentTime = 0
         Game.sfxExplosion.play().catch(() => {})
@@ -1028,36 +1218,117 @@
     // ENEMY BULLET
     // ============================================================
     let EnemyBullet = function (x, y, speed, color, vx) {
-        this.width  = 5
-        this.height = 20
-        this.x      = x
-        this.y      = y
-        this.vx     = vx || 0
-        this.vy     = speed || 3
-        this.color  = color || "lime"
+        const d      = Game.difficulty
+        const isBoss = color === '#FF3300'
+        const isAggr = color === 'tomato'
+        this.diff    = d
+        this.isBoss  = isBoss
+        this.isAggr  = isAggr
+        this.width   = Math.round(isBoss ? 10 + Math.min(7, d * 0.65) : isAggr ? 6 + Math.min(4, d * 0.38) : 4 + Math.min(3, d * 0.28))
+        this.height  = Math.round(isBoss ? 28 + Math.min(18, d * 1.8) : 18 + Math.min(14, d * 1.3))
+        this.x       = x - this.width / 2
+        this.y       = y
+        this.vx      = vx || 0
+        this.vy      = speed || 3
+        this.color   = color || 'lime'
+        this.phase   = Math.random() * Math.PI * 2
+        // normal bullets: subtle sinusoidal side drift
+        this.wobbleAmp   = (!isBoss && !isAggr) ? 0.4 + Math.random() * 0.3 : 0
+        this.wobbleFreq  = 4.5 + Math.random() * 2
+        this.wobblePhase = Math.random() * Math.PI * 2
+        // aggressive bullets at d>=3: gently home toward player
+        this.homing = isAggr && d >= 3
         this.index  = Game.enemyBulletIndex
         Game.enemyBullets[Game.enemyBulletIndex] = this
         Game.enemyBulletIndex++
     }
 
     EnemyBullet.prototype.draw = function () {
-        Game.ctx.save()
-        Game.ctx.fillStyle   = this.color
-        Game.ctx.shadowColor = this.color === 'lime' ? 'rgba(0,255,0,0.8)' : 'rgba(255,80,50,0.9)'
-        Game.ctx.shadowBlur  = 10
-        const r = 3
-        Game.ctx.beginPath()
-        Game.ctx.moveTo(this.x + r, this.y)
-        Game.ctx.arcTo(this.x + this.width, this.y,               this.x + this.width, this.y + this.height, r)
-        Game.ctx.arcTo(this.x + this.width, this.y + this.height, this.x,              this.y + this.height, r)
-        Game.ctx.arcTo(this.x,              this.y + this.height, this.x,              this.y,               r)
-        Game.ctx.arcTo(this.x,              this.y,               this.x + this.width, this.y,               r)
-        Game.ctx.closePath()
-        Game.ctx.fill()
-        Game.ctx.restore()
+        const ctx    = Game.ctx
+        const d      = this.diff
+        const isBoss = this.isBoss
+        const isAggr = this.isAggr
+        const cx     = this.x + this.width / 2
+        const y      = this.y
+        const h      = this.height
+        const w      = this.width
+
+        let glowColor, bodyColor, coreColor
+        if (isBoss) {
+            glowColor = '#FF2200'
+            bodyColor = `rgba(255,${Math.min(255, 40 + d * 8)},0,0.95)`
+            coreColor = '#FFFAE0'
+        } else if (isAggr) {
+            glowColor = '#FF7020'
+            bodyColor = `rgba(255,${Math.min(255, 75 + d * 7)},15,0.9)`
+            coreColor = d >= 4 ? '#FFF0D0' : '#FFCCA0'
+        } else {
+            const g   = Math.min(255, 155 + d * 11)
+            glowColor = `rgb(0,${g},80)`
+            bodyColor = `rgba(0,${g},55,0.9)`
+            coreColor = d >= 5 ? '#DFFFDF' : '#A8FFB0'
+        }
+
+        const pulse    = Math.sin(Game.elapsedTime * 13 + this.phase)
+        const glowBase = isBoss ? Math.min(42, 22 + d * 2.2) : isAggr ? Math.min(28, 10 + d * 1.8) : Math.min(22, 6 + d * 1.6)
+        const glowBlur = glowBase + pulse * (isBoss ? 6 : 2.5)
+
+        ctx.save()
+
+        // rotate diagonal boss bullets to face travel direction
+        if (this.vx !== 0) {
+            const angle = Math.atan2(this.vy, this.vx) - Math.PI / 2
+            ctx.translate(cx, y + h / 2)
+            ctx.rotate(angle)
+            ctx.translate(-cx, -(y + h / 2))
+        }
+
+        ctx.shadowColor = glowColor
+        ctx.shadowBlur  = glowBlur
+
+        // teardrop: wide tail at top, pointed tip at bottom (direction of travel)
+        const tailW = w * 0.88
+        const tipW  = w * 0.07
+        ctx.beginPath()
+        ctx.moveTo(cx - tailW / 2, y)
+        ctx.lineTo(cx + tailW / 2, y)
+        ctx.lineTo(cx + tipW,      y + h * 0.88)
+        ctx.lineTo(cx,             y + h)
+        ctx.lineTo(cx - tipW,      y + h * 0.88)
+        ctx.closePath()
+        ctx.fillStyle = bodyColor
+        ctx.fill()
+
+        // bright core streak
+        ctx.shadowBlur  = glowBlur * 0.4
+        ctx.strokeStyle = coreColor
+        ctx.lineWidth   = Math.max(1, w * 0.18)
+        ctx.lineCap     = 'round'
+        ctx.beginPath()
+        ctx.moveTo(cx, y + h * 0.07)
+        ctx.lineTo(cx, y + h * 0.83)
+        ctx.stroke()
+
+        ctx.restore()
     }
 
     EnemyBullet.prototype.update = function () {
+        // sinusoidal drift for normal bullets
+        if (this.wobbleAmp > 0) {
+            const prev = this.wobblePhase
+            this.wobblePhase += this.wobbleFreq * Game.dt
+            this.x += (Math.sin(this.wobblePhase) - Math.sin(prev)) * this.wobbleAmp * 8
+        }
+
+        // gentle homing for aggressive bullets at d>=3
+        if (this.homing) {
+            const px  = Game.player.x + Game.player.width / 2
+            const bx  = this.x + this.width / 2
+            const dir = px > bx ? 1 : -1
+            this.vx  += dir * 1.5 * Game.dt
+            this.vx   = Math.max(-3, Math.min(3, this.vx))
+        }
+
         this.x += this.vx * Game.dt * 60
         this.y += this.vy * Game.dt * 60
         if (this.y > Game.c.height + 20 || this.x < -20 || this.x > Game.c.width + 20) {
@@ -1147,7 +1418,7 @@
         const p = Game.player
         switch (this.type) {
             case 'rapidfire': p.rapidFire  = 6; break
-            case 'shield':    p.shield = 5; Game.invincibleMode(5000); break
+            case 'shield':    p.shield = 5; p.invincible = true; break
             case 'triple':    p.tripleShot = 6; break
             case 'bomb':
                 p.bombFlash = 1
