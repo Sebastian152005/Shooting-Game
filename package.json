@@ -1,0 +1,13 @@
+{
+  "name": "shooting-game",
+  "version": "1.0.0",
+  "private": true,
+  "description": "WAR IN SPACE, juego de naves con Canvas y JavaScript sin dependencias de ejecución",
+  "engines": { "node": ">=24" },
+  "scripts": {
+    "start": "node tools/serve.cjs",
+    "test": "node --test tests/game.test.cjs tests/project.test.cjs tests/server.test.cjs",
+    "check": "node --test tests/project.test.cjs",
+    "test:browser": "node tests/browser-smoke.cjs"
+  }
+}
