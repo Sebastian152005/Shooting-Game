@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <base href="../../">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WAR IN SPACE</title>
+    <link rel="stylesheet" href="src/css/common.css">
+    <link rel="stylesheet" href="src/css/game.css">
+</head>
+<body>
+    <canvas width="900" height="540" id="game" tabindex="0" aria-label="Zona de juego. Flechas o A y D para moverse; Espacio para disparar; P o Escape para pausar. Enter para reiniciar después de perder.">Tu navegador necesita soporte de Canvas para ejecutar el juego.</canvas>
+    <dialog id="pauseMenu" class="pause-dialog" aria-labelledby="pauseTitle">
+        <div class="pause-icon" aria-hidden="true"><span></span><span></span></div>
+        <p class="pause-eyebrow">WAR IN SPACE</p>
+        <h2 id="pauseTitle">Pausa</h2>
+        <p class="pause-description">Vuelve a la misión cuando quieras.</p>
+        <button id="resumeGame" class="pause-resume" type="button" autofocus>Continuar <span aria-hidden="true">→</span></button>
+        <details id="audioSettings" class="audio-settings" aria-label="Ajustes de sonido"></details>
+    </dialog>
+    <script src="src/js/config.js"></script>
+    <script src="src/js/infrastructure/assets.js"></script>
+    <script src="src/js/infrastructure/browser.js"></script>
+    <script src="src/js/domain/geometry.js"></script>
+    <script src="src/js/domain/formation.js"></script>
+    <script src="src/js/domain/collision.js"></script>
+    <script src="src/js/domain/motion.js"></script>
+    <script src="src/js/domain/progression.js"></script>
+    <script src="src/js/infrastructure/storage.js"></script>
+    <script src="src/js/application/settings.js"></script>
+    <script src="src/js/presentation/ui/settings.js"></script>
+    <script src="src/js/application/game.js"></script>
+    <script src="src/js/application/progression.js"></script>
+    <script src="src/js/application/spawning.js"></script>
+    <script src="src/js/application/movement.js"></script>
+    <script src="src/js/application/simulation.js"></script>
+    <script src="src/js/application/attacks.js"></script>
+    <script src="src/js/presentation/viewport.js"></script>
+    <script src="src/js/infrastructure/input.js"></script>
+    <script src="src/js/infrastructure/audio.js"></script>
+    <script src="src/js/presentation/ui/hud.js"></script>
+    <script src="src/js/presentation/ui/scene.js"></script>
+    <script src="src/js/presentation/ui/entities.js"></script>
+    <script src="src/js/application/entities/player.js"></script>
+    <script src="src/js/application/entities/bullet.js"></script>
+    <script src="src/js/application/entities/enemy.js"></script>
+    <script src="src/js/application/entities/boss.js"></script>
+    <script src="src/js/application/entities/enemy-bullet.js"></script>
+    <script src="src/js/application/entities/particle.js"></script>
+    <script src="src/js/application/entities/power-up.js"></script>
+    <script src="src/js/application/entities/floating-text.js"></script>
+    <script src="src/js/bootstrap/game.js"></script>
+</body>
+</html>
