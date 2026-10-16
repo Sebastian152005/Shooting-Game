@@ -3,27 +3,36 @@ const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const path = require('node:path')
 const os = require('node:os')
-const { pathToFileURL } = require('node:url')
 const { spawn } = require('node:child_process')
+const { browserArguments, browserDiagnostics, findBrowserExecutable } = require('./support/chromium.cjs')
 
 const root = path.resolve(__dirname, '..')
-const candidates = [process.env.CHROME_PATH,
-    'C:/Program Files/Google/Chrome/Application/chrome.exe',
-    'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe']
-const executable = candidates.find(candidate => candidate && fs.existsSync(candidate))
+const executable = findBrowserExecutable()
 if (!executable) throw Error('Set CHROME_PATH to a Chromium executable to run browser smoke checks.')
 const errors = []
 const { createStaticServer } = require('../tools/static-server.cjs')
 const server = createStaticServer({ root, onError: message => errors.push(message) })
+const artifacts = path.join(root, 'tests', 'artifacts')
+const reportPath = path.join(artifacts, 'browser-smoke-report.json')
+
+function writeReport(status, details = {}) {
+    fs.mkdirSync(artifacts, { recursive: true })
+    fs.writeFileSync(reportPath, JSON.stringify({
+        status,
+        updatedAt: new Date().toISOString(),
+        executable,
+        ...details
+    }, null, 2))
+}
 
 async function main() {
     await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
     const origin = 'http://127.0.0.1:' + server.address().port
     const temporaryRoot = path.resolve(os.tmpdir())
     const profile = fs.mkdtempSync(path.join(temporaryRoot, 'shooting-game-browser-'))
-    const browser = spawn(executable, ['--headless=new', '--disable-background-networking',
-        '--no-first-run', '--no-default-browser-check', '--remote-debugging-port=0',
-        '--user-data-dir=' + profile, '--window-size=1280,720', 'about:blank'], { windowsHide: true })
+    const browser = spawn(executable, browserArguments(profile), { windowsHide: true })
+    const screenshots = new Map()
+    writeReport('running')
     let socket
     let stderr = ''
     try {
@@ -44,6 +53,13 @@ async function main() {
         })
         const pending = new Map()
         let sequence = 0
+        browser.once('exit', code => {
+            for (const request of pending.values()) {
+                clearTimeout(request.timer)
+                request.reject(Error(`Chromium exited with code ${code} during ${request.method}`))
+            }
+            pending.clear()
+        })
         socket.addEventListener('message', event => {
             const message = JSON.parse(event.data)
             if (message.id) {
@@ -63,7 +79,7 @@ async function main() {
         const send = (method, params = {}, sessionId) => new Promise((resolve, reject) => {
             const id = ++sequence
             const timer = setTimeout(() => { pending.delete(id); reject(Error('CDP timeout: ' + method)) }, 10000)
-            pending.set(id, { resolve, reject, timer })
+            pending.set(id, { resolve, reject, timer, method })
             socket.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }))
         })
         const { targetId } = await send('Target.createTarget', { url: 'about:blank' })
@@ -92,9 +108,11 @@ async function main() {
         await evaluate("document.querySelector('[data-music-volume]').value = '27'; document.querySelector('[data-music-volume]').dispatchEvent(new Event('input')); document.getElementById('btnPlay').click()")
         await waitFor('!!window.ShootingGame?.game')
         const initial = await evaluate(`(() => { const g = window.ShootingGame.game; return { enemies: Object.keys(g.enemies).length,
-            intro: g.waveStage, volume: g.audio.volume, width: g.c.width, cssWidth: g.c.getBoundingClientRect().width } })()`)
+            intro: g.waveStage, energy: g.energy, volume: g.audio.volume,
+            width: g.c.width, cssWidth: g.c.getBoundingClientRect().width } })()`)
         assert.equal(initial.enemies, 0)
         assert.equal(initial.intro, 'intro')
+        assert.equal(initial.energy, 0)
         assert.equal(initial.volume, 0.27)
         assert.ok(initial.width >= initial.cssWidth)
         assert.equal(await evaluate("document.getElementById('audioSettings').getClientRects().length"), 0,
@@ -112,20 +130,65 @@ async function main() {
         await evaluate("document.getElementById('audioSettings').open = true; document.querySelector('[data-music-volume]').value = '42'; document.querySelector('[data-music-volume]').dispatchEvent(new Event('input'))")
         assert.equal(await evaluate('window.ShootingGame.game.audio.volume'), 0.42)
         assert.equal(await evaluate('window.ShootingGame.game.audio.paused'), true)
-        const artifacts = path.join(root, 'tests', 'artifacts')
-        fs.mkdirSync(artifacts, { recursive: true })
         const pauseScreenshot = await command('Page.captureScreenshot', { format: 'png' })
-        fs.writeFileSync(path.join(artifacts, 'browser-pause.png'), Buffer.from(pauseScreenshot.data, 'base64'))
+        screenshots.set('browser-pause.png', Buffer.from(pauseScreenshot.data, 'base64'))
         await evaluate("document.getElementById('resumeGame').click()")
         assert.equal(await evaluate('window.ShootingGame.game.paused'), false)
         assert.equal(await evaluate("document.getElementById('audioSettings').getClientRects().length"), 0)
         await waitFor('Object.values(window.ShootingGame.game.enemies).some(e => !e.entering)')
         await waitFor('Object.values(window.ShootingGame.game.enemies).some(e => e.entering && e.y + e.height > 0)')
+        const entryState = await evaluate(`(() => { const g = window.ShootingGame.game;
+            const e = Object.values(g.enemies).find(e => e.entering && e.y + e.height > 0);
+            return { progress: e.entryElapsed / g.config.motion.entryDuration,
+                startedOutside: e.entryStartY + e.height < 0,
+                approaching: e.y < e.entryY,
+                bank: e.bank };
+        })()`)
+        assert.ok(entryState.progress > 0 && entryState.progress < 1)
+        assert.equal(entryState.startedOutside, true)
+        assert.equal(entryState.approaching, true)
+        assert.ok(Number.isFinite(entryState.bank))
+        const entryScreenshot = await command('Page.captureScreenshot', { format: 'png' })
+        screenshots.set('browser-ufo-entry.png', Buffer.from(entryScreenshot.data, 'base64'))
         assert.equal(await evaluate(`(() => { const g = window.ShootingGame.game;
             const e = Object.values(g.enemies).find(e => e.entering && e.y + e.height > 0);
             const bullet = new g.entities.Bullet(e.x + e.width / 2, 0);
             bullet.y = e.y + e.height / 2; e.update();
             return e.dead && !g.bullets[bullet.index]; })()`), true, 'visible entrants receive player damage')
+        assert.equal(await evaluate(`(() => { const g = window.ShootingGame.game;
+            const e = Object.values(g.enemies).find(e => !e.entering && e.role === 'pressure');
+            g.enemyBullets = {}; g.safeCorridor = null;
+            e.x = 0; g.player.x = g.view.width / 2;
+            const fired = e.shoot(); const bullet = Object.values(g.enemyBullets)[0];
+            return fired && bullet.vx === 0 && !bullet.homing
+                && bullet.attackType === 'common' && bullet.color === g.config.enemyAttackColors.common;
+        })()`), true, 'common UFOs maintain steady straight green laser pressure')
+        const precisionState = await evaluate(`(() => { const g = window.ShootingGame.game;
+            g.difficulty = 4; g.applyWaveProfile(); g.safeCorridor = null; g.enemyAttackCooldown = 0;
+            for (const e of Object.values(g.enemies)) { e.pendingAttack = null; e.shootTimer = 0; }
+            const nextMarksman = Math.max(5, Math.ceil(g.enemyIndex / 5) * 5);
+            g.enemyIndex = nextMarksman;
+            const e = new g.entities.Enemy({ x: g.player.x - 100, y: 90 });
+            e.entering = false; e.x = g.player.x - 100; e.y = 90; e.shootTimer = e.shootInterval;
+            g.player.horizontalVelocity = g.player.speed * 60;
+            const playerCenter = g.player.x + g.player.width / 2;
+            e.setAIState(g.rules.ENEMY_AI_STATES.PATROL);
+            e.updateAI(0.01);
+            const acquired = e.ai.state === g.rules.ENEMY_AI_STATES.ACQUIRING
+                && e.ai.lastKnownTarget !== null;
+            const fired = e.role === 'marksman' && e.shoot();
+            return { fired, acquired, index: e.index, kind: e.pendingAttack?.kind,
+                predicted: e.pendingAttack?.targetX > playerCenter,
+                leadTime: e.pendingAttack?.leadTime,
+                color: g.config.enemyAttackColors.precision, safe: g.safeCorridor !== null };
+        })()`)
+        assert.deepEqual(precisionState, {
+            fired: true, acquired: true, index: precisionState.index, kind: 'aimed', predicted: true,
+            leadTime: precisionState.leadTime, color: '#FFB347', safe: false
+        })
+        assert.ok(precisionState.leadTime >= 0.25 && precisionState.leadTime <= 0.45)
+        const precisionScreenshot = await command('Page.captureScreenshot', { format: 'png' })
+        screenshots.set('browser-ufo-precision.png', Buffer.from(precisionScreenshot.data, 'base64'))
         await evaluate(`(() => { const g = window.ShootingGame.game;
             g.difficulty = 8; g.applyWaveProfile(); g.fillEnemySlots(); g.player.shield = 1000; g.shooting = true;
             window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft' })); })()`)
@@ -136,7 +199,7 @@ async function main() {
         assert.equal(await evaluate(`(() => { const g = window.ShootingGame.game, f = window.ShootingGame.domain.formation;
             const enemies = Object.values(g.enemies); return enemies.every((a,i) => enemies.slice(i+1).every(b => !f.overlaps(a,b,11.99))); })()`), true)
         const combatScreenshot = await command('Page.captureScreenshot', { format: 'png' })
-        fs.writeFileSync(path.join(artifacts, 'browser-combat.png'), Buffer.from(combatScreenshot.data, 'base64'))
+        screenshots.set('browser-combat.png', Buffer.from(combatScreenshot.data, 'base64'))
         assert.equal(await evaluate(`(() => { const g = window.ShootingGame.game;
             if (g.paused) g.continued();
             g.shooting = false; g.nextBossAt = g.difficulty + 1;
@@ -152,8 +215,131 @@ async function main() {
             g.updateProgression(0);
             if (!g.boss || g.waveStage !== 'boss') return 'boss did not enter: paused=' + g.paused;
             g.boss.hp = Math.ceil(g.boss.maxHp * 0.2); g.boss.updatePhase();
-            return g.boss.phase === 3 && !Object.values(g.floatingTexts).some(t => t.text.includes('FASE'));
-        })()`), true, 'boss transition waits for surviving UFOs and has no phase announcements')
+            g.boss.attackStep = 2; g.safeCorridor = null;
+            const combined = g.boss.prepareAttack();
+            return g.boss.phase === 3 && combined && g.boss.warningPattern === 'crossfire'
+                && g.boss.warningAngles.length === 7 && g.safeCorridor === null
+                && !Object.values(g.floatingTexts).some(t => t.text.includes('FASE'));
+        })()`), true, 'boss transition preserves the classic encounter and unlocks warned crossfire')
+        const worldEvents = await evaluate(`(() => { const g = window.ShootingGame.game;
+            const sounds = [];
+            g.__smokeSounds = sounds;
+            g.playEnergyPickupSound = () => sounds.push('energy');
+            g.playPulseActivationSound = () => sounds.push('pulse');
+            g.playPulseImpactSound = outcome => sounds.push('impact:' + outcome.projectiles + ':' + outcome.meteors);
+            const meteorsBefore = Object.keys(g.meteors).length;
+            const capsulesBefore = Object.values(g.powerUps).filter(item => item.isEnergyPickup).length;
+            g.energy = 20; g.energySpawnRemaining = 0; g.meteorSpawnRemaining = 0;
+            g.updateWorldEvents(1 / 60);
+            const bossSuppressed = Object.keys(g.meteors).length === meteorsBefore
+                && Object.values(g.powerUps).filter(item => item.isEnergyPickup).length === capsulesBefore;
+            const pickup = new g.entities.EnergyPickup(g.player.x, g.player.y);
+            const previousDt = g.dt;
+            pickup.x = g.view.width + 100;
+            g.dt = 0.5;
+            pickup.update();
+            const capsuleRotated = Math.abs(pickup.rotation
+                - g.config.energy.capsuleRotationSpeed * 0.5) < 0.000001;
+            pickup.x = g.player.x + g.player.width / 2;
+            pickup.y = g.player.y + g.player.height / 2;
+            g.dt = 0;
+            pickup.update();
+            g.dt = previousDt;
+            return { energy: g.energy, pickupSound: sounds.includes('energy'),
+                configuredPickup: g.rewardEffects.pickupAmount,
+                configuredCost: g.rewardEffects.pulseCost,
+                energyPickups: Object.values(g.powerUps).filter(item => item.isEnergyPickup).length,
+                meteorsAdded: Object.keys(g.meteors).length - meteorsBefore,
+                bossSuppressed, capsuleRotated };
+        })()`)
+        assert.deepEqual(worldEvents, { energy: 40, pickupSound: true,
+            configuredPickup: 20, configuredCost: 100, energyPickups: 0,
+            meteorsAdded: 0, bossSuppressed: true, capsuleRotated: true })
+        await evaluate(`(() => { const g = window.ShootingGame.game;
+            g.bossCount = 3;
+            g.meteorSpawnRemaining = 0;
+            g.updateWorldEvents(1 / 60);
+            if (g.bossMeteorWarningRemaining <= 0) throw new Error('third boss did not announce orbital burst');
+            g.boss.entering = false; g.boss.y = g.config.progression.bossTopMargin;
+            g.drawScene();
+        })()`)
+        const bossScreenshot = await command('Page.captureScreenshot', { format: 'png' })
+        screenshots.set('browser-boss-meteor.png', Buffer.from(bossScreenshot.data, 'base64'))
+        await evaluate('window.ShootingGame.game.meteors = {}')
+        const touchControls = await evaluate(`(() => { const buttons = [...document.querySelectorAll('#touchControls button')];
+            return { count: buttons.length, labelled: buttons.every(button => button.getAttribute('aria-label')),
+                sized: buttons.every(button => parseFloat(getComputedStyle(button).minWidth) >= 56
+                    && parseFloat(getComputedStyle(button).minHeight) >= 56) }; })()`)
+        assert.deepEqual(touchControls, { count: 5, labelled: true, sized: true })
+        const pulseHud = await evaluate(`(() => { const g = window.ShootingGame.game;
+            const button = document.querySelector('[data-input-action="pulse"]');
+            g.energy = 100; g.drawScene();
+            const locked = !g.activateDefensivePulse() && g.energy === 100;
+            g.bossActive = false; g.waveStage = g.rules.WAVE_STAGES.WAVE;
+            g.drawScene();
+            return { locked, ready: g.energy === 100,
+                label: button.getAttribute('aria-label') };
+        })()`)
+        assert.deepEqual(pulseHud, { locked: true, ready: true,
+            label: 'Activar pulso defensivo' })
+        const pulseHudScreenshot = await command('Page.captureScreenshot', { format: 'png' })
+        screenshots.set('browser-pulse-hud.png', Buffer.from(pulseHudScreenshot.data, 'base64'))
+        const pulse = await evaluate(`(() => { const g = window.ShootingGame.game;
+            g.energy = 100;
+            g.enemyBullets = {
+                near: { x: g.player.x + g.player.width / 2, y: g.player.y + g.player.height / 2,
+                    width: 4, height: 4, update() {}, draw() {} },
+                far: { x: g.view.width - 4, y: 0, width: 4, height: 4, update() {}, draw() {} }
+            };
+            g.meteors = { pulseTarget: {
+                x: g.player.x, y: g.player.y, width: 24, height: 24,
+                destroy() { delete g.meteors.pulseTarget; }
+            } };
+            window.dispatchEvent(new KeyboardEvent('keydown', { key: 'e' }));
+            window.dispatchEvent(new KeyboardEvent('keyup', { key: 'e' }));
+            const first = { energy: g.energy, near: !!g.enemyBullets.near,
+                meteor: !!g.meteors.pulseTarget };
+            g.energy = 100;
+            g.enemyBullets.second = { x: g.player.x, y: g.player.y, width: 4, height: 4 };
+            window.dispatchEvent(new KeyboardEvent('keydown', { key: 'e' }));
+            window.dispatchEvent(new KeyboardEvent('keyup', { key: 'e' }));
+            const result = { first, far: !!g.enemyBullets.far, second: !!g.enemyBullets.second,
+                energy: g.energy, activationSounds: g.__smokeSounds.filter(sound => sound === 'pulse').length,
+                projectileImpact: g.__smokeSounds.includes('impact:1:0'),
+                meteorImpact: g.__smokeSounds.includes('impact:1:1') };
+            g.bossActive = true; g.waveStage = g.rules.WAVE_STAGES.BOSS;
+            return result;
+        })()`)
+        assert.deepEqual(pulse, { first: { energy: 0, near: false, meteor: false },
+            far: true, second: false, energy: 0, activationSounds: 2,
+            projectileImpact: true, meteorImpact: true })
+        await evaluate('window.ShootingGame.game.boss.die()')
+        await waitFor('document.getElementById("bossRewardDialog")?.open === true')
+        const rewardGeometry = await evaluate(`(() => {
+            const rect = document.getElementById('bossRewardDialog').getBoundingClientRect();
+            return { centerX: rect.left + rect.width / 2, centerY: rect.top + rect.height / 2,
+                viewportX: innerWidth / 2, viewportY: innerHeight / 2,
+                fits: rect.top >= 0 && rect.bottom <= innerHeight };
+        })()`)
+        assert.ok(Math.abs(rewardGeometry.centerX - rewardGeometry.viewportX) < 1)
+        assert.ok(Math.abs(rewardGeometry.centerY - rewardGeometry.viewportY) < 1)
+        assert.equal(rewardGeometry.fits, true)
+        const rewardScreenshot = await command('Page.captureScreenshot', { format: 'png' })
+        screenshots.set('browser-mission-reward.png', Buffer.from(rewardScreenshot.data, 'base64'))
+        const reward = await evaluate(`(() => { const g = window.ShootingGame.game;
+            const dialog = document.getElementById('bossRewardDialog');
+            const buttons = [...dialog.querySelectorAll('button')];
+            const selected = g.activeRewardChoices[0].id;
+            buttons[0].click();
+            const progress = JSON.parse(localStorage.getItem('warInSpaceProgress'));
+            return { options: buttons.length, selected, level: progress.rewards[selected],
+                bosses: progress.bossesDefeated, resumed: !g.paused, closed: !dialog.open };
+        })()`)
+        assert.equal(reward.options, 2)
+        assert.equal(reward.level, 1)
+        assert.equal(reward.bosses, 1)
+        assert.equal(reward.resumed, true)
+        assert.equal(reward.closed, true)
         await evaluate(`(() => { const g = window.ShootingGame.game; g.score = 12345; g.gameOver(); })()`)
         assert.equal(await evaluate('window.ShootingGame.game.isGameOver'), true)
         assert.equal(await evaluate("localStorage.getItem('warInSpaceHS')"), '12345')
@@ -161,7 +347,7 @@ async function main() {
         assert.equal(await evaluate('window.ShootingGame.game.waveStage'), 'intro')
         assert.equal(await evaluate('Object.keys(window.ShootingGame.game.enemies).length'), 0)
         const screenshot = await command('Page.captureScreenshot', { format: 'png' })
-        fs.writeFileSync(path.join(artifacts, 'browser-start.png'), Buffer.from(screenshot.data, 'base64'))
+        screenshots.set('browser-start.png', Buffer.from(screenshot.data, 'base64'))
         const history = await command('Page.getNavigationHistory')
         const menuEntry = history.entries.find(entry => entry.url === origin + '/index.html')
         assert.ok(menuEntry)
@@ -171,18 +357,14 @@ async function main() {
         assert.equal(await evaluate('window.ShootingGame.settings.get().music'), 0.42)
         assert.equal(await evaluate("document.body.classList.contains('fade-out')"), false,
             'back navigation restores a visible, usable menu')
-        await command('Page.navigate', { url: pathToFileURL(path.join(root, 'index.html')).href })
-        await waitFor('location.protocol === "file:" && !!document.getElementById("btnPlay") && !!window.ShootingGame?.settings')
-        await evaluate("document.getElementById('btnPlay').click()")
-        await waitFor('location.protocol === "file:" && !!window.ShootingGame?.game?.player')
-        await waitFor('window.ShootingGame.game.assets.get("player").naturalWidth > 0')
-        assert.equal(await evaluate('window.ShootingGame.game.waveStage'), 'intro')
-        await evaluate('window.ShootingGame.game.gameOver(); window.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }))')
-        assert.equal(await evaluate('window.ShootingGame.game.isGameOver'), false)
         assert.deepEqual(errors, [], 'no uncaught JavaScript exceptions or missing local resources')
-        console.log('Browser smoke passed: HTTP and file entry, menu, pause-only sound, audio persistence, intro, entry damage, combat, resize, survivor-preserving boss transition, hidden phase labels, Game Over, restart and record.')
+        for (const [name, image] of screenshots) fs.writeFileSync(path.join(artifacts, name), image)
+        writeReport('passed', { screenshots: [...screenshots.keys()] })
+        console.log('Browser smoke passed: ESM over HTTP, menu, accessible touch controls, ambient energy, instant pulse impacts, meteor disintegration, dynamic boss crossfire, progressive boss orbital attacks, upgraded boss rendering, combat, resize, reward persistence, Game Over, restart and record.')
     } catch (error) {
-        console.error('Chromium diagnostics:', stderr.slice(-1800))
+        const diagnostic = browserDiagnostics(stderr)
+        writeReport('failed', { error: error.message, diagnostic })
+        console.error('Chromium diagnostics:', diagnostic)
         throw error
     } finally {
         if (socket) socket.close()

@@ -17,6 +17,7 @@
                 this.elapsedTime += dt
                 this.updateSpawns(dt)
                 this.updateProgression(dt)
+                this.updateWorldEvents?.(dt)
                 this.comboTimer = Math.max(0, this.comboTimer - dt)
                 if (this.comboTimer === 0) {
                     this.combo = 0
@@ -30,7 +31,7 @@
 
                 for (const enemy of Object.values(this.enemies)) enemy.update()
                 if (this.boss) this.boss.update()
-                for (const collection of ['enemyBullets', 'bullets', 'powerUps', 'particles', 'floatingTexts']) {
+                for (const collection of ['enemyBullets', 'bullets', 'meteors', 'powerUps', 'particles', 'floatingTexts']) {
                     for (const entity of Object.values(this[collection])) entity.update()
                 }
                 this.player.update()

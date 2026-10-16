@@ -1,211 +1,6 @@
 const assert = require('node:assert/strict')
 const { test } = require('node:test')
-const fs = require('node:fs')
-const vm = require('node:vm')
-const path = require('node:path')
-
-// Load the same scripts, in the same order, as the browser entry page.
-// Browser APIs are controlled; no video, audio or real-time timer is required.
-function setup({ blockedStorage = false, storedScore = null, imageStatus = 'loading',
-    width = 900, height = 540, pixelRatio = 1, audioPanel = false,
-    storageValues = new Map(), synthAudio = false, page = 'src/html/game.html', readyEnemies = true, seed = 42 } = {}) {
-    const frames = new Map()
-    const listeners = new Map()
-    let nextFrame = 1
-    const images = []
-    const drawnImages = []
-    const videoDraws = []
-    const transforms = []
-    const drawnTexts = []
-    let bounds = { width, height }
-    let fallbackFills = 0
-    class MockImage {
-        constructor() {
-            this.complete = imageStatus !== 'loading'
-            this.naturalWidth = imageStatus === 'loaded' ? 100 : 0
-            images.push(this)
-        }
-    }
-    const listen = (type, callback) => {
-        const callbacks = listeners.get(type) || []
-        callbacks.push(callback)
-        listeners.set(type, callbacks)
-    }
-    const gradient = { addColorStop() {} }
-    const context = new Proxy({}, {
-        get(target, key) {
-            if (key === 'fillText') return text => { drawnTexts.push(text) }
-            if (key === 'setTransform') return (...values) => { transforms.push(values) }
-            if (key === 'drawImage') return (image, ...values) => {
-                if (image instanceof MockImage) {
-                    assert.ok(image.complete && image.naturalWidth > 0, 'never draw an unavailable image')
-                    drawnImages.push(image)
-                } else videoDraws.push(values)
-            }
-            if (key === 'fill') return () => { fallbackFills++ }
-            if (key === 'measureText') return () => ({ width: 20 })
-            if (key === 'createRadialGradient' || key === 'createLinearGradient') return () => gradient
-            return target[key] || (() => {})
-        }
-    })
-    const canvas = { width: 900, height: 540, getContext: () => context, addEventListener: listen,
-        focus() {},
-        getBoundingClientRect: () => bounds }
-    const controls = new Map()
-    function control() {
-        const handlers = new Map()
-        return {
-            value: '', textContent: '', attributes: {},
-            addEventListener(type, handler) { handlers.set(type, handler) },
-            setAttribute(name, value) { this.attributes[name] = value },
-            dispatch(type, event = { preventDefault() {} }) { handlers.get(type)(event) },
-            closest() { return this }
-        }
-    }
-    const panel = {
-        innerHTML: '',
-        querySelector(selector) {
-            if (!controls.has(selector)) controls.set(selector, control())
-            return controls.get(selector)
-        }
-    }
-    const record = control()
-    const play = control()
-    const resume = control()
-    const pauseMenu = { ...control(), open: false,
-        showModal() { this.open = true }, close() { this.open = false } }
-    class Media {
-        constructor() { this.style = {}; this.paused = true; this.readyState = 0 }
-        play() { this.paused = false; return Promise.resolve() }
-        pause() { this.paused = true }
-        addEventListener() {}
-    }
-    const document = {
-        hidden: false,
-        getElementById: id => ({ game: canvas, audioSettings: audioPanel ? panel : null,
-            pauseMenu, resumeGame: resume,
-            highScore: record, btnPlay: play }[id] || null),
-        createElement: () => new Media(),
-        addEventListener: listen,
-        body: {
-            classList: { add() {}, remove() {} },
-            appendChild(media) { media.parentNode = this },
-            removeChild(media) { media.parentNode = null }
-        }
-    }
-    const window = {
-        devicePixelRatio: pixelRatio,
-        addEventListener: listen,
-        requestAnimationFrame(callback) { const id = nextFrame++; frames.set(id, callback); return id },
-        cancelAnimationFrame(id) { frames.delete(id) }
-    }
-    if (synthAudio) {
-        const parameter = () => ({ value: 0, setValueAtTime() {}, linearRampToValueAtTime() {}, exponentialRampToValueAtTime() {} })
-        window.AudioContext = class {
-            constructor() { this.nodes = []; this.destination = {}; this.state = 'running'; this.currentTime = 1; this.sampleRate = 8000 }
-            resume() { this.state = 'running'; return Promise.resolve() }
-            node() {
-                const node = { connections: [], gain: parameter(), frequency: parameter(),
-                    connect(destination) { this.connections.push(destination) }, start() {}, stop() {} }
-                this.nodes.push(node)
-                return node
-            }
-            createGain() { return this.node() }
-            createOscillator() { return this.node() }
-            createBufferSource() { return this.node() }
-            createBiquadFilter() { return this.node() }
-            createBuffer(channels, size) { return { getChannelData: () => new Float32Array(size) } }
-        }
-    }
-    if (storedScore !== null) storageValues.set('warInSpaceHS', storedScore)
-    const seededMath = Object.create(Math)
-    let randomState = seed >>> 0
-    seededMath.random = () => {
-        randomState = (Math.imul(randomState, 1664525) + 1013904223) >>> 0
-        return randomState / 4294967296
-    }
-    const sandbox = {
-        Math: seededMath,
-        window, document, Image: MockImage, Audio: Media,
-        performance: { now: () => 1 },
-        localStorage: {
-            getItem(key) { if (blockedStorage) throw Error('blocked'); return storageValues.get(key) ?? null },
-            setItem(key, value) { if (blockedStorage) throw Error('blocked'); storageValues.set(key, String(value)) }
-        }
-    }
-    const root = path.join(__dirname, '..')
-    const html = fs.readFileSync(path.join(root, page), 'utf8')
-    const contextSandbox = vm.createContext(sandbox)
-    for (const [, file] of html.matchAll(/<script src="([^"]+)"><\/script>/g)) {
-        vm.runInContext(fs.readFileSync(path.join(root, file), 'utf8'), contextSandbox, { filename: file })
-    }
-    const app = contextSandbox.ShootingGame
-    const Game = app.game
-    if (page === 'index.html') return { app: app, controls, record, listeners, storageValues }
-    const { Bullet, Enemy, Boss } = Game.entities
-    Game.configureEnemiesForTest = function () {
-        Game.applyWaveProfile()
-        for (const enemy of Object.values(Game.enemies)) enemy.role = null
-        for (const enemy of Object.values(Game.enemies)) enemy.configure(Game.waveProfile)
-    }
-    Game.spawnBossForTest = function () {
-        // Boss-focused fixtures start with a deliberately cleared field.
-        Game.enemies = {}
-        return new Boss()
-    }
-    // Most combat tests need an established formation. Intro is tested separately.
-    function prepareCombat() {
-        Game.waveStage = 'wave'
-        Game.introRemaining = 0
-        Game.pendingSpawns = []
-        for (let i = 0; i < Game.maxEnemies; i++) {
-            const enemy = new Enemy()
-            const occupied = Object.values(Game.enemies).filter(other => other !== enemy)
-            const gap = app.config.progression.enemySeparation
-            const columns = Math.floor((Game.view.width + gap) / (enemy.width + gap))
-            const preferred = { x: (i % columns) * (enemy.width + gap),
-                y: Game.enemyBounds().top + Math.floor(i / columns) * (enemy.height + gap) }
-            const position = app.domain.formation.findPosition(enemy,
-                Game.enemyBounds(), occupied, preferred, gap)
-            assert.ok(position, 'combat fixture fits the viewport')
-            enemy.x = position.x
-            enemy.y = position.y
-            enemy.homeY = enemy.y
-            enemy.entering = false
-        }
-        Game.refreshEnemyCount()
-    }
-    if (readyEnemies) prepareCombat()
-    Game.advanceSpawnsForTest = function (seconds) {
-        const previousDt = Game.dt
-        Game.dt = 0.05
-        for (let time = 0; time < seconds; time += Game.dt) {
-            Game.updateSpawns(Game.dt)
-            for (const enemy of Object.values(Game.enemies)) {
-                enemy.shootTimer = 0
-                enemy.update()
-            }
-        }
-        Game.dt = previousDt
-    }
-    function frame(timestamp = 16) {
-        assert.equal(frames.size, 1, 'exactly one active animation frame')
-        const [id, callback] = frames.entries().next().value
-        frames.delete(id)
-        callback(timestamp)
-    }
-    return { Game, Bullet, Enemy, Boss, frames, listeners, document, frame,
-        images, drawnImages, videoDraws, transforms, assets: app.assets,
-        drawnTexts, prepareCombat,
-        app: app, controls, storageValues,
-        pauseMenu, resume,
-        fallbackFills: () => fallbackFills,
-        resize(width, height, ratio = window.devicePixelRatio) {
-            bounds = { width, height }
-            window.devicePixelRatio = ratio
-            listeners.get('resize')[0]()
-        } }
-}
+const { setup } = require('./support/game-fixture.cjs')
 
 test('game starts even when the background video is not ready', () => {
     const { Game, frame } = setup()
@@ -381,7 +176,8 @@ test('sprite instances are shared across enemies, bosses and game restarts', () 
     const { Game, Enemy, images, assets, drawnImages } = setup({ imageStatus: 'loaded' })
     const playerImage = assets.get(Game.player.sprite)
     const scoutImage = assets.get(Object.values(Game.enemies)[0].sprite)
-    assert.equal(images.length, 4)
+    const initialImageCount = images.length
+    assert.ok(initialImageCount >= 5)
     for (let i = 0; i < 20; i++) {
         new Enemy().draw()
         assert.equal(drawnImages.at(-1), scoutImage)
@@ -390,7 +186,7 @@ test('sprite instances are shared across enemies, bosses and game restarts', () 
     assert.equal(drawnImages.at(-1), assets.get('enemy'))
     Game.init()
     assert.equal(assets.get(Game.player.sprite), playerImage)
-    assert.equal(images.length, 4)
+    assert.equal(images.length, initialImageCount)
 })
 
 test('missing and pending sprites use visible fallbacks without stopping the game', () => {
@@ -507,6 +303,10 @@ test('synthesized sounds route through the effects volume and mute channel', () 
     Game.playTripleShotSound()
     Game.playHitSound()
     Game.playBombSound()
+    Game.playEnergyPickupSound()
+    Game.playPulseActivationSound()
+    Game.playOrbitalWarningSound()
+    Game.playPulseImpactSound({ projectiles: 4, meteors: 1 })
     for (const type of ['rapidfire', 'shield', 'triple', 'bomb']) Game.playPowerUpSound(type)
     const directOutputs = Game.audioCtx.nodes.filter(node => node.connections.includes(Game.audioCtx.destination))
     assert.deepEqual(directOutputs, [Game.effectsGain])
@@ -644,6 +444,9 @@ test('boss waits for surviving UFOs, cancels reinforcements and freezes progress
     assert.equal(Game.difficulty, 5)
     assert.equal(Game.boss, null)
     assert.equal(Game.canPrepareEnemyAttack(), true, 'remaining UFOs can still attack')
+    Game.meteors.environmental = { index: 'environmental' }
+    Game.powerUps.energy = { isEnergyPickup: true }
+    Game.powerUps.combat = { isEnergyPickup: false }
     for (const enemy of Object.values(Game.enemies)) enemy.die()
     assert.equal(Game.pendingSpawns.length, 0, 'kills during boss preparation do not reserve replacements')
     assert.ok(Game.score > score)
@@ -656,6 +459,9 @@ test('boss waits for surviving UFOs, cancels reinforcements and freezes progress
     assert.equal(Game.bossCount, 1)
     assert.equal(Game.nextBossAt, 9)
     assert.equal(Object.keys(Game.enemyBullets).length, 0)
+    assert.equal(Object.keys(Game.meteors).length, 0, 'boss encounters remove environmental meteors')
+    assert.equal(Game.powerUps.energy, undefined, 'boss encounters remove uncollected energy capsules')
+    assert.ok(Game.powerUps.combat, 'combat power-ups remain owned by their original lifecycle')
     const boss = Game.boss
     Game.updateProgression(200)
     assert.equal(Game.boss, boss)
@@ -726,7 +532,7 @@ test('late progression caps enemies, projectile speed and density without accele
     assert.ok(Object.values(Game.enemyBullets).every(bullet => bullet.vy <= 6.2))
 })
 
-test('advanced formations combine specialist fans and aimed shots, with short-lived homing', () => {
+test('advanced formations combine controller fans with aggressor-only homing', () => {
     const { Game } = setup()
     Game.difficulty = 6
     Game.configureEnemiesForTest()
@@ -748,29 +554,38 @@ test('advanced formations combine specialist fans and aimed shots, with short-li
     assert.equal(diver.pattern, 'diver')
     diver.x = Game.view.width - diver.width
     Game.player.x = 0
-    diver.shoot()
-    assert.equal(Object.keys(Game.enemyBullets).length, 0, 'directed shots warn before firing')
+    assert.equal(diver.shoot(), false, 'aggressor waits until its sensor detects the player')
+    Game.player.x = diver.x - Game.player.width
+    assert.equal(diver.shoot(), true)
+    assert.equal(Object.keys(Game.enemyBullets).length, 0, 'tracking shots warn before firing')
+    assert.equal(diver.pendingAttack.kind, 'tracking')
     Game.dt = 0.7
     diver.update()
     bullets = Object.values(Game.enemyBullets)
     assert.equal(bullets.length, 1)
-    assert.ok(bullets[0].vx < 0)
+    assert.equal(bullets[0].vx, 0)
+    assert.equal(bullets[0].attackType, 'aggressor')
+    assert.equal(bullets[0].color, Game.config.enemyAttackColors.aggressor)
+    assert.equal(bullets[0].homing, true)
     Game.enemyBullets = {}
     Game.difficulty = 8
     Game.configureEnemiesForTest()
     Game.enemyAttackCooldown = 0
-    diver.salvo = 2
+    Game.enemyAttackTurn = diver.index
+    for (const actor of Object.values(Game.enemies)) {
+        if (actor !== diver && actor.role !== 'pressure') actor.shootTimer = 0
+    }
     diver.shoot()
     assert.equal(diver.pendingAttack.kind, 'tracking')
     diver.update()
     const homing = Object.values(Game.enemyBullets)[0]
     assert.equal(homing.homing, true)
-    Game.dt = 0.4
+    Game.dt = 0.5
     homing.update()
     homing.update()
     const vx = homing.vx
     homing.update()
-    assert.equal(homing.vx, vx, 'steering ends after 0.8 seconds')
+    assert.equal(homing.vx, vx, 'steering ends after its limited tracking window')
 })
 
 test('boss phases change volleys and always warn before firing', () => {
@@ -779,7 +594,7 @@ test('boss phases change volleys and always warn before firing', () => {
     boss.entering = false
     boss.y = 15
     boss.prepareAttack()
-    assert.equal(boss.warningAngles.length, 4)
+    assert.equal(boss.warningAngles.length, 5)
     assert.equal(Object.keys(Game.enemyBullets).length, 0)
     Game.dt = 0.3
     const x = boss.x
@@ -788,9 +603,9 @@ test('boss phases change volleys and always warn before firing', () => {
     assert.equal(boss.x, x, 'the warning origin stays stationary')
     assert.equal(Object.keys(Game.enemyBullets).length, 0)
     boss.update()
-    assert.equal(Object.keys(Game.enemyBullets).length, 4)
+    assert.equal(Object.keys(Game.enemyBullets).length, 5)
     Game.enemyBullets = {}
-    Game.updateProgression(Game.safeCorridor.remaining)
+    Game.updateProgression(0.45)
     boss.hp = boss.maxHp * 0.6
     boss.updatePhase()
     assert.equal(boss.phase, 2)
@@ -805,7 +620,12 @@ test('boss phases change volleys and always warn before firing', () => {
     assert.equal(boss.phase, 3)
     assert.equal(boss.warningTime, 0, 'changing phase cancels the previous volley')
     boss.prepareAttack()
-    assert.equal(boss.warningAngles.length, 6)
+    assert.equal(boss.warningPattern, 'crossfire')
+    assert.equal(boss.warningAngles.length, 7)
+    assert.equal(Game.safeCorridor, null)
+    Game.dt = Game.config.progression.bossWarning
+    boss.update()
+    assert.equal(Object.keys(Game.enemyBullets).length, 7)
 })
 
 test('all movement patterns stay above the player and inside a narrow screen', () => {
@@ -942,7 +762,7 @@ test('four timed advances lead to the first boss and combat resumes silently', (
     assert.equal(Game.bannerMessage, 'NIVEL 6')
 })
 
-test('directed shots lock the target, remain stationary while charging and allow a bait-and-dodge', () => {
+test('aggressors require detection, lock their warning and then release a tracking round', () => {
     const { Game } = setup({ width: 2560, height: 1080 })
     Game.difficulty = 4
     Game.configureEnemiesForTest()
@@ -950,10 +770,13 @@ test('directed shots lock the target, remain stationary while charging and allow
     enemy.x = Game.view.width - enemy.width
     enemy.y = 20
     Game.player.x = 50
+    assert.equal(enemy.shoot(), false, 'a distant player stays outside the aggressor sensor')
+    Game.player.x = enemy.x - Game.player.width
     assert.equal(enemy.shoot(), true)
     const { targetX, targetY, angle } = enemy.pendingAttack
     const origin = [enemy.x, enemy.y]
-    assert.equal(targetX, 85)
+    assert.equal(targetX, Game.player.x + Game.player.width / 2)
+    assert.equal(angle, 0)
     assert.equal(Object.keys(Game.enemyBullets).length, 0)
     Game.player.x = Game.view.width - Game.player.width
     Game.dt = 0.3
@@ -967,11 +790,50 @@ test('directed shots lock the target, remain stationary while charging and allow
     enemy.update()
     const bullets = Object.values(Game.enemyBullets)
     assert.equal(bullets.length, 1)
-    assert.equal(bullets[0].homing, false)
-    assert.ok(Math.abs(Math.atan2(bullets[0].vx, bullets[0].vy) - angle) < 0.000001)
+    assert.equal(bullets[0].homing, true)
+    assert.equal(bullets[0].attackType, 'aggressor')
+    assert.equal(bullets[0].color, Game.config.enemyAttackColors.aggressor)
+    assert.equal(bullets[0].vx, 0)
     const vx = bullets[0].vx
     bullets[0].update()
-    assert.equal(bullets[0].vx, vx, 'the directed bullet does not retarget after firing')
+    assert.notEqual(bullets[0].vx, vx, 'only the aggressor projectile retargets after firing')
+})
+
+test('marksmen telegraph a locked trajectory without creating a safe corridor', () => {
+    const { Game } = setup({ width: 900, height: 540 })
+    Game.difficulty = 4
+    Game.configureEnemiesForTest()
+    const marksman = Object.values(Game.enemies).find(enemy => enemy.role === 'marksman')
+    assert.ok(marksman)
+    marksman.x = Game.player.x - 120
+    marksman.y = 90
+    Game.player.horizontalVelocity = Game.player.speed * 60
+    Game.enemyAttackCooldown = 0
+    assert.equal(marksman.shoot(), true)
+    assert.equal(marksman.pendingAttack.kind, 'aimed')
+    assert.equal(Game.safeCorridor, null)
+    const locked = {
+        targetX: marksman.pendingAttack.targetX,
+        targetY: marksman.pendingAttack.targetY,
+        angle: marksman.pendingAttack.angle
+    }
+    assert.ok(locked.targetX > Game.player.x + Game.player.width / 2)
+    assert.ok(marksman.pendingAttack.leadTime >= 0.25 && marksman.pendingAttack.leadTime <= 0.45)
+    Game.player.x = 0
+    Game.dt = Game.config.progression.enemyWarning / 2
+    marksman.update()
+    assert.deepEqual({
+        targetX: marksman.pendingAttack.targetX,
+        targetY: marksman.pendingAttack.targetY,
+        angle: marksman.pendingAttack.angle
+    }, locked)
+    marksman.update()
+    const shot = Object.values(Game.enemyBullets)[0]
+    assert.equal(shot.attackType, 'precision')
+    assert.equal(shot.color, Game.config.enemyAttackColors.precision)
+    assert.equal(shot.homing, false)
+    assert.ok(Math.abs(Math.atan2(shot.vx, shot.vy) - locked.angle) < 0.000001)
+    assert.equal(Game.safeCorridor, null)
 })
 
 test('destroying an enemy on the final charge frame cancels its shot', () => {
@@ -995,10 +857,11 @@ test('only one dangerous shot charges at once, followed by a shared recovery gap
     const { Game, Enemy } = setup()
     Game.difficulty = 8
     Game.configureEnemiesForTest()
-    new Enemy()
+    for (const actor of Object.values(Game.enemies)) actor.shootTimer = 0
     const second = new Enemy()
     second.entering = false
     second.y = 20
+    second.x = Game.player.x
     const first = Game.enemies[3]
     assert.equal(first.shoot(), true)
     assert.equal(second.shoot(), false)
@@ -1141,7 +1004,7 @@ test('boss fans preserve a gap through their final phase on a narrow screen', ()
     boss.y = 15
     boss.hp = boss.maxHp * 0.2
     boss.updatePhase()
-    boss.attackStep = 2
+    boss.attackStep = 3
     assert.equal(boss.prepareAttack(), true)
     assert.equal(boss.warningAngles.length, 6)
     const gap = Game.safeCorridor
@@ -1181,7 +1044,7 @@ test('fan reservations freeze in pause and are released on death, resize and res
     enemy.die()
     assert.equal(Game.safeCorridor, null)
     Game.enemyAttackCooldown = 0
-    const other = Game.enemies[2]
+    const other = Game.enemies[4]
     other.salvo = 1
     assert.equal(other.shoot(), true)
     resize(1280, 720)
@@ -1223,32 +1086,96 @@ test('fan gaps vary progressively, remain inside the viewport and can be reached
 test('enemy roles unlock gradually and specialists never fall back to pressure shots', () => {
     const { Game } = setup()
     assert.ok(Object.values(Game.enemies).every(enemy => enemy.role === 'pressure'))
-    Game.difficulty = 4
+    Game.difficulty = 2
     Game.configureEnemiesForTest()
-    assert.equal(Game.enemies[3].role, 'hunter')
+    assert.equal(Game.enemies[3].role, 'aggressor')
+    assert.equal(Game.waveProfile.tracking, false)
     assert.ok(Object.values(Game.enemies).every(enemy => enemy.role !== 'controller'))
     Game.difficulty = 6
     Game.configureEnemiesForTest()
     const controller = Game.enemies[0]
-    const hunter = Game.enemies[3]
+    const aggressor = Game.enemies[3]
+    const marksman = Game.enemies[5]
     const pressure = Game.enemies[1]
     assert.equal(controller.role, 'controller')
+    assert.equal(marksman.role, 'marksman')
     assert.ok(controller.shootInterval > pressure.shootInterval)
     assert.equal(controller.shoot(), true, 'first shot is already a fan')
     assert.equal(controller.pendingAttack.kind, 'fan')
-    assert.equal(hunter.shoot(), false, 'hunter waits while the controller reserves space')
+    assert.equal(aggressor.shoot(), false, 'aggressor waits while the controller reserves space')
     assert.equal(Object.keys(Game.enemyBullets).length, 0, 'waiting specialists emit no fallback bullets')
     controller.die()
     assert.equal(Game.safeCorridor, null)
-    assert.equal(hunter.shoot(), false, 'cancellation keeps the recovery gap')
+    assert.equal(aggressor.shoot(), false, 'cancellation keeps the recovery gap')
     Game.updateProgression(0.45)
-    assert.equal(hunter.shoot(), true)
-    assert.equal(hunter.pendingAttack.kind, 'aimed')
-    pressure.x = 0
-    assert.equal(pressure.shoot(), true, 'ordinary pressure can continue during a directed warning')
+    assert.equal(aggressor.shoot(), true)
+    assert.equal(aggressor.pendingAttack.kind, 'tracking')
+    pressure.x = Game.player.x + Game.player.width / 2 - pressure.width / 2
+    assert.equal(pressure.shoot(), true, 'aligned common UFOs can continue during a tracking warning')
     assert.equal(pressure.pendingAttack, null)
     assert.equal(Object.keys(Game.enemyBullets).length, 1)
-    assert.equal(Object.values(Game.enemyBullets)[0].vx, 0)
+    const commonShot = Object.values(Game.enemyBullets)[0]
+    assert.equal(commonShot.vx, 0)
+    assert.equal(commonShot.color, Game.config.enemyAttackColors.common)
+    assert.equal(commonShot.attackType, 'common')
+})
+
+test('common UFOs stay green and straight while aggressors recover tomato and later tracking', () => {
+    const { Game } = setup()
+    const enemy = Game.enemies[0]
+    enemy.x = 0
+    Game.player.x = Game.view.width / 2
+    Game.player.movingRight = true
+    Game.player.update()
+    assert.equal(enemy.shoot(), true, 'common UFOs maintain steady baseline fire outside a narrow lane')
+    assert.equal(Object.keys(Game.enemyBullets).length, 1)
+    Game.enemyBullets = {}
+    enemy.x = Game.player.x + Game.player.width / 2 - enemy.width / 2
+    assert.equal(enemy.shoot(), true)
+    const common = Object.values(Game.enemyBullets)[0]
+    assert.equal(common.vx, 0)
+    assert.ok(common.vy > 0)
+    assert.equal(common.homing, false)
+    assert.equal(common.color, Game.config.enemyAttackColors.common)
+    assert.equal(common.attackType, 'common')
+
+    Game.enemyBullets = {}
+    Game.difficulty = 2
+    Game.configureEnemiesForTest()
+    let aggressor = Object.values(Game.enemies).find(actor => actor.role === 'aggressor')
+    aggressor.x = 0
+    Game.enemyAttackCooldown = 0
+    assert.equal(aggressor.shoot(), false, 'level-two aggressors do not fire straight shots outside their lane')
+    aggressor.x = Game.player.x
+    Game.enemyAttackCooldown = 0
+    assert.equal(aggressor.shoot(), true)
+    assert.equal(aggressor.pendingAttack.kind, 'aggressive')
+    Game.dt = Game.config.progression.enemyWarning
+    aggressor.update()
+    const legacyShot = Object.values(Game.enemyBullets)[0]
+    assert.equal(legacyShot.homing, false)
+    assert.equal(legacyShot.vx, 0)
+    assert.equal(legacyShot.color, Game.config.enemyAttackColors.aggressor)
+    assert.equal(legacyShot.attackType, 'aggressor')
+
+    Game.enemyBullets = {}
+    Game.difficulty = 3
+    Game.configureEnemiesForTest()
+    aggressor = Object.values(Game.enemies).find(actor => actor.role === 'aggressor')
+    aggressor.x = Game.player.x
+    Game.enemyAttackCooldown = 0
+    assert.equal(aggressor.shoot(), true)
+    assert.equal(aggressor.pendingAttack.kind, 'tracking')
+    Game.dt = Game.config.progression.enemyWarning
+    aggressor.update()
+    const tracking = Object.values(Game.enemyBullets)[0]
+    assert.equal(tracking.homing, true)
+    assert.equal(tracking.isTracking, true)
+    const initialVelocity = tracking.vx
+    Game.player.x = initialVelocity >= 0 ? 0 : Game.view.width - Game.player.width
+    Game.dt = 0.1
+    tracking.update()
+    assert.ok(initialVelocity >= 0 ? tracking.vx < initialVelocity : tracking.vx > initialVelocity)
 })
 
 test('specialist quotas survive successive replacements and level reconfiguration', () => {
@@ -1259,7 +1186,7 @@ test('specialist quotas survive successive replacements and level reconfiguratio
     Game.advanceSpawnsForTest(8)
     const check = () => {
         const enemies = Object.values(Game.enemies)
-        for (const role of ['hunter', 'controller']) {
+        for (const role of ['aggressor', 'marksman', 'controller']) {
             assert.ok(enemies.filter(enemy => enemy.role === role).length <= app.config.progression.maxSpecialistsPerRole)
         }
         assert.ok(enemies.some(enemy => enemy.role === 'pressure'))
@@ -1282,9 +1209,12 @@ test('ready specialists rotate instead of allowing the first controller to monop
     const { Game } = setup()
     Game.difficulty = 6
     Game.configureEnemiesForTest()
-    const actors = [Game.enemies[0], Game.enemies[2], Game.enemies[3]]
-    for (const actor of actors) actor.shootTimer = actor.shootInterval
-    for (const expected of [0, 2, 3, 0, 2, 3]) {
+    const actors = [Game.enemies[0], Game.enemies[3], Game.enemies[4], Game.enemies[5]]
+    for (const actor of actors) {
+        actor.shootTimer = actor.shootInterval
+        actor.x = Game.player.x
+    }
+    for (const expected of [0, 3, 4, 5, 0, 3, 4, 5]) {
         let charged = null
         for (const actor of actors) {
             if (actor.shoot()) { charged = actor; break }
@@ -1295,6 +1225,52 @@ test('ready specialists rotate instead of allowing the first controller to monop
     }
     Game.init()
     assert.equal(Game.enemyAttackTurn, 0)
+})
+
+test('a ready specialist outside radar cannot block one that has acquired the player', () => {
+    const { Game } = setup()
+    Game.difficulty = 4
+    Game.configureEnemiesForTest()
+    const aggressor = Object.values(Game.enemies).find(enemy => enemy.role === 'aggressor')
+    const marksman = Object.values(Game.enemies).find(enemy => enemy.role === 'marksman')
+    Game.player.x = Game.view.width - Game.player.width
+    aggressor.x = 0
+    marksman.x = Game.player.x
+    aggressor.shootTimer = aggressor.shootInterval
+    marksman.shootTimer = marksman.shootInterval
+    assert.equal(aggressor.canAcquireTarget(), false)
+    assert.equal(marksman.canAcquireTarget(), true)
+    assert.equal(marksman.shoot(), true)
+    assert.equal(marksman.pendingAttack.kind, 'aimed')
+})
+
+test('specialist AI acquires, cancels on radar loss and can acquire again', () => {
+    const { Game } = setup()
+    Game.difficulty = 4
+    Game.configureEnemiesForTest()
+    const aggressor = Object.values(Game.enemies).find(enemy => enemy.role === 'aggressor')
+    aggressor.speed = 0
+    aggressor.x = 0
+    Game.player.x = 0
+    aggressor.shootTimer = aggressor.shootInterval
+    aggressor.setAIState(Game.rules.ENEMY_AI_STATES.PATROL)
+
+    Game.dt = 0.1
+    aggressor.update()
+    assert.equal(aggressor.ai.state, Game.rules.ENEMY_AI_STATES.ACQUIRING)
+    assert.equal(aggressor.pendingAttack, null)
+    assert.ok(aggressor.ai.lastKnownTarget)
+
+    Game.player.x = Game.view.width - Game.player.width
+    aggressor.update()
+    assert.equal(aggressor.ai.state, Game.rules.ENEMY_AI_STATES.PATROL)
+    assert.equal(aggressor.ai.lastKnownTarget, null)
+
+    Game.player.x = 0
+    aggressor.update()
+    for (let frame = 0; frame < 3; frame++) aggressor.update()
+    assert.equal(aggressor.ai.state, Game.rules.ENEMY_AI_STATES.WARNING)
+    assert.equal(aggressor.pendingAttack.kind, 'tracking')
 })
 
 test('destroying a controller after firing preserves the refuge for surviving projectiles', () => {
@@ -1337,7 +1313,7 @@ test('first-level formations stay wholly in the upper 30 percent, including narr
         assert.ok(Object.values(Game.enemies).every(enemy => enemy.y + enemy.height <= Game.view.height * 0.3 + 0.000001))
         Game.difficulty = 4
         Game.configureEnemiesForTest()
-        assert.ok(Object.values(Game.enemies).some(enemy => enemy.role === 'hunter'
+        assert.ok(Object.values(Game.enemies).some(enemy => enemy.role === 'aggressor'
             && enemy.maxY > Game.view.height * 0.3 - enemy.height), 'deeper incursions remain unlocked later')
     }
 })
@@ -1380,14 +1356,41 @@ test('overdue spawn reservations are staggered and remain reserved when the entr
     Game.updateSpawns(0)
     assert.equal(Object.keys(Game.enemies).length, 1)
     const enemy = Object.values(Game.enemies)[0]
+    const bounds = Game.enemyBounds(false, 1)
     enemy.width = Game.view.width
     enemy.x = 0
+    enemy.entryTargetX = 0
+    enemy.entryY = bounds.top
+    enemy.height = bounds.bottom - bounds.top
     Game.updateSpawns(app.config.progression.spawnSpacing)
     assert.equal(Game.pendingSpawns.length, 5, 'blocked entrance does not lose its reservation')
-    enemy.y = 100
+    enemy.width = Game.config.enemySize.width
+    enemy.height = Game.config.enemySize.height
+    enemy.entering = false
+    enemy.y = bounds.bottom + app.config.progression.enemySeparation
     Game.updateSpawns(0.01)
     assert.equal(Object.keys(Game.enemies).length, 2)
     assert.equal(Game.enemiesAlive, 6)
+})
+
+test('arrivals reserve distinct landing slots and never remain suspended at the top', () => {
+    const { Game, app } = setup({ readyEnemies: false, width: 900, height: 540 })
+    Game.waveStage = 'wave'
+    Game.introRemaining = 0
+    Game.random = minimum => minimum
+    Game.updateSpawns(100)
+    Game.updateSpawns(app.config.progression.spawnSpacing)
+    const arrivals = Object.values(Game.enemies)
+    assert.equal(arrivals.length, 2)
+    assert.notDeepEqual(
+        arrivals.map(enemy => [enemy.entryTargetX, enemy.entryY]),
+        [[arrivals[0].entryTargetX, arrivals[0].entryY], [arrivals[0].entryTargetX, arrivals[0].entryY]],
+        'each arrival owns a distinct complete landing slot'
+    )
+    Game.dt = 0.02
+    for (let frame = 0; frame < 160; frame++) arrivals.forEach(enemy => enemy.update())
+    assert.ok(arrivals.every(enemy => !enemy.entering))
+    assert.ok(arrivals.every(enemy => enemy.y >= enemy.minY))
 })
 
 test('simulation keeps formations separated through combat, bosses, respawns and resize', () => {
@@ -1416,7 +1419,10 @@ test('simulation keeps formations separated through combat, bosses, respawns and
                 for (let i = 0; i < enemies.length; i++) {
                     const enemy = enemies[i]
                     assert.ok(Number.isFinite(enemy.x) && Number.isFinite(enemy.y))
-                    assert.ok(enemy.x >= 0 && enemy.x + enemy.width <= Game.view.width + 0.000001)
+                    assert.ok(enemy.entering
+                        ? enemy.x + enemy.width >= -app.config.progression.enemySeparation
+                            && enemy.x <= Game.view.width + app.config.progression.enemySeparation
+                        : enemy.x >= 0 && enemy.x + enemy.width <= Game.view.width + 0.000001)
                     for (let j = i + 1; j < enemies.length; j++) {
                         assert.equal(app.domain.formation.overlaps(enemy, enemies[j], app.config.progression.enemySeparation - 0.000001), false,
                             'enemy bodies retain a visible margin, including during entry')
@@ -1604,6 +1610,7 @@ test('blocked movement freezes its curve phase and resumes without skipping the 
     Game.pendingSpawns = []
     Game.difficulty = 2
     Game.configureEnemiesForTest()
+    Game.enemyIndex = 1
     const enemy = new Enemy({ x: 100, y: 100 })
     enemy.pattern = 'sine'
     enemy.entering = false
@@ -1633,7 +1640,8 @@ test('a wave can leave a vertically blocked lane and resume its curve instead of
     wave.movingLeft = false
     wave.shootInterval = 100000
     Game.resetEnemyMotion(wave)
-    new Enemy({ x: 100, y: 150 })
+    const blocker = new Enemy({ x: 100, y: 150 })
+    blocker.entering = false
     Game.dt = 0.02
     const heights = []
     for (let step = 0; step < 220; step++) {

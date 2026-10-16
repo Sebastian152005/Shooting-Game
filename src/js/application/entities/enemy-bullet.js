@@ -1,13 +1,15 @@
 (function (app) {
     app.entityFactories.EnemyBullet = function (Game) {
-        const EnemyBullet = function (x, y, speed, color, vx, vy) {
+        const EnemyBullet = function (x, y, speed, color, vx, vy, attackType) {
             const d      = Game.difficulty
             const isBoss = color === '#FF3300'
-            const isAggr = color === 'tomato'
+            const isAggressor = attackType === 'aggressor'
+            const isPrecision = attackType === 'precision'
             this.diff    = d
             this.isBoss  = isBoss
-            this.isAggr  = isAggr
-            this.width   = Math.round(isBoss ? 10 + Math.min(7, d * 0.65) : isAggr ? 6 + Math.min(4, d * 0.38) : 4 + Math.min(3, d * 0.28))
+            this.isAggressor = isAggressor
+            this.isPrecision = isPrecision
+            this.width   = Math.round(isBoss ? 10 + Math.min(7, d * 0.65) : isAggressor ? 6 + Math.min(4, d * 0.38) : 4 + Math.min(3, d * 0.28))
             this.height  = Math.round(isBoss ? 28 + Math.min(18, d * 1.8) : 18 + Math.min(14, d * 1.3))
             this.x       = x - this.width / 2
             this.y       = y
@@ -15,12 +17,14 @@
             this.vy      = vy === undefined ? speed || 3 : vy
             this.age     = 0
             this.color   = color || 'lime'
+            this.attackType = attackType || (isBoss ? 'boss' : 'common')
             this.phase   = Game.randomFloat() * Math.PI * 2
-            // normal bullets: subtle sinusoidal side drift
-            this.wobbleAmp   = (!isBoss && !isAggr) ? 0.4 + Game.randomFloat() * 0.3 : 0
+            // Physical trajectories stay deterministic; the common laser's
+            // inherited shimmer is rendered without moving its hitbox.
+            this.wobbleAmp   = 0
             this.wobbleFreq  = 4.5 + Game.randomFloat() * 2
             this.wobblePhase = Game.randomFloat() * Math.PI * 2
-            // Only selected late-wave shots get a brief steering window.
+            // Only aggressor shots receive a brief, dodgeable steering window.
             this.homing = false
             this.homingFor = 0
             this.index  = Game.enemyBulletIndex
@@ -46,9 +50,9 @@
                 this.homingFor = Math.max(0, this.homingFor - Game.dt)
                 const px  = Game.player.x + Game.player.width / 2
                 const bx  = this.x + this.width / 2
-                const dir = px > bx ? 1 : -1
-                this.vx  += dir * 1.5 * Game.dt
-                this.vx   = Math.max(-1.8, Math.min(1.8, this.vx))
+                this.vx = Game.rules.steerLateral(this.vx, bx, px, Game.dt,
+                    Game.config.progression.homingTurnRate,
+                    Game.config.progression.homingMaxLateralSpeed)
             }
 
             this.x += this.vx * Game.dt * 60

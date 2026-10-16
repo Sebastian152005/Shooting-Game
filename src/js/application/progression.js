@@ -2,6 +2,8 @@
 
     app.createWaves = function (Game) {
         const config = Game.config.progression
+        const stages = Game.rules.WAVE_STAGES
+        const events = Game.rules.WAVE_EVENTS
         return {
             applyWaveProfile: function () {
                 this.waveProfile = this.rules.progressionProfile(this.difficulty, this.config)
@@ -11,9 +13,12 @@
 
             updateProgression: function (dt) {
                 if (this.paused || this.isGameOver) return
-                if (this.waveStage === 'intro') {
+                this.updateEnergy?.(dt)
+                if (this.waveStage === stages.INTRO) {
                     this.introRemaining = Math.max(0, this.introRemaining - dt)
-                    if (this.introRemaining === 0) this.waveStage = 'wave'
+                    if (this.introRemaining === 0) {
+                        this.waveStage = this.rules.transitionWaveStage(this.waveStage, events.INTRO_COMPLETED)
+                    }
                     return
                 }
                 this.enemyAttackCooldown = Math.max(0, this.enemyAttackCooldown - dt)
@@ -22,15 +27,15 @@
                     this.safeCorridor.approachRemaining = Math.max(0, this.safeCorridor.approachRemaining - dt)
                     if (this.safeCorridor.remaining === 0) this.safeCorridor = null
                 }
-                if (this.waveStage === 'boss') return
-                if (this.waveStage === 'boss-pending') {
+                if (this.waveStage === stages.BOSS) return
+                if (this.waveStage === stages.BOSS_PENDING) {
                     this.tryStartBoss()
                     return
                 }
-                if (this.waveStage === 'recovery') {
+                if (this.waveStage === stages.RECOVERY) {
                     this.recoveryTime = Math.max(0, this.recoveryTime - dt)
                     if (this.recoveryTime === 0) {
-                        this.waveStage = 'wave'
+                        this.waveStage = this.rules.transitionWaveStage(this.waveStage, events.RECOVERY_COMPLETED)
                         this.levelUpTimer = 0
                         this.bannerMessage = null
                         this.fillEnemySlots()
@@ -51,13 +56,13 @@
             },
 
             increaseDifficulty: function () {
-                if (this.waveStage !== 'wave' || this.isGameOver) return
+                if (this.waveStage !== stages.WAVE || this.isGameOver) return
                 this.difficulty++
                 this.levelFlash = 0.2
                 this.applyWaveProfile()
                 this.playLevelUpSound()
                 if (this.difficulty === this.nextBossAt) {
-                    this.waveStage = 'boss-pending'
+                    this.waveStage = this.rules.transitionWaveStage(this.waveStage, events.BOSS_REQUESTED)
                     this.pendingSpawns = []
                     this.refreshEnemyCount()
                     this.tryStartBoss()
@@ -68,7 +73,7 @@
             },
 
             tryStartBoss: function () {
-                if (this.waveStage !== 'boss-pending' || this.paused || this.isGameOver
+                if (this.waveStage !== stages.BOSS_PENDING || this.paused || this.isGameOver
                     || Object.keys(this.enemies).length || this.bossActive) return false
                 this.bossCount++
                 this.nextBossAt += Math.max(config.minimumBossGap, 5 - this.bossCount)
@@ -80,30 +85,38 @@
                 if (Object.keys(this.enemies).length) throw new Error('Boss entry requires a cleared field')
                 this.releaseIncursion()
                 // The final UFO was defeated; no old volley enters the encounter.
-                this.waveStage = 'boss'
+                this.waveStage = this.rules.transitionWaveStage(this.waveStage, events.BOSS_STARTED)
                 this.safeCorridor = null
                 this.enemyAttackCooldown = 0
                 this.setBanner('¡JEFE!', 3)
                 this.pendingSpawns = []
                 this.enemyBullets = {}
                 this.bullets = {}
+                this.meteors = {}
+                for (const [id, powerUp] of Object.entries(this.powerUps)) {
+                    if (powerUp.isEnergyPickup) delete this.powerUps[id]
+                }
+                this.prepareBossWorldEvents?.()
                 this.refreshEnemyCount()
             },
 
             endBossEncounter: function () {
                 this.releaseIncursion()
-                this.waveStage = 'recovery'
+                this.waveStage = this.rules.transitionWaveStage(this.waveStage, events.BOSS_DEFEATED)
                 this.safeCorridor = null
                 this.enemyAttackCooldown = 0
                 this.recoveryTime = config.bossRecovery
                 this.enemyBullets = {}
+                this.clearBossWorldEvents?.()
                 this.setBanner('ZONA DESPEJADA', config.bossRecovery)
                 this.levelFlash = 0.25
                 this.invincibleMode(config.bossRecovery * 1000)
+                this.recordBossDefeat?.()
+                this.offerBossRewards?.()
             },
 
             canPrepareEnemyAttack: function (actor) {
-                const available = ['wave', 'boss-pending'].includes(this.waveStage) && !this.paused && !this.isGameOver
+                const available = [stages.WAVE, stages.BOSS_PENDING].includes(this.waveStage) && !this.paused && !this.isGameOver
                     && !this.safeCorridor
                     && this.enemyAttackCooldown === 0
                     && Object.values(this.enemies).filter(enemy => enemy.pendingAttack && !enemy.dead).length < config.maxChargedAttacks
@@ -113,6 +126,7 @@
                 const waiting = Object.values(this.enemies).some(enemy => enemy !== actor
                     && !enemy.dead && !enemy.entering && enemy.role !== 'pressure'
                     && enemy.shootTimer >= enemy.shootInterval
+                    && enemy.canAcquireTarget()
                     && (enemy.attackTurn < actor.attackTurn
                         || (enemy.attackTurn === actor.attackTurn && enemy.index < actor.index)))
                 if (waiting) return false
@@ -120,7 +134,7 @@
                 return true
             },
 
-            fireEnemyVolley: function (x, y, speed, color, angles, fanOwner = null) {
+            fireEnemyVolley: function (x, y, speed, color, angles, fanOwner = null, attackType = null) {
                 const velocity = Math.min(speed, config.maxBulletSpeed)
                 const gap = this.safeCorridor
                 if (gap) {
@@ -139,10 +153,12 @@
                 if (Object.keys(this.enemyBullets).length + angles.length + reserved > config.maxEnemyBullets) return []
                 return angles.map(angle => {
                     const bullet = new this.entities.EnemyBullet(x, y, velocity, color,
-                        Math.sin(angle) * velocity, Math.cos(angle) * velocity)
+                        Math.sin(angle) * velocity, Math.cos(angle) * velocity, attackType)
                     bullet.homing = false
                     bullet.isFan = fanOwner !== null
-                    bullet.wobbleAmp = fanOwner === null && angles.length === 1 && angle === 0 && color === 'lime' ? bullet.wobbleAmp : 0
+                    // Gameplay projectiles keep their announced trajectory. The
+                    // common green laser is straight; only aggressors may steer.
+                    bullet.wobbleAmp = 0
                     return bullet
                 })
             }

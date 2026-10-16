@@ -8,6 +8,11 @@
         app.createViewport(Game), app.createWaves(Game), app.createSpawning(Game), app.createMovement(Game),
         app.createAttacks(Game), app.createSimulation(Game), app.createScene(Game),
         app.createEntityRenderer(Game), app.createMedia(Game))
+    if (app.createEnergySystem) Object.assign(Game, app.createEnergySystem(Game))
+    if (app.createRewardSystem) Object.assign(Game, app.createRewardSystem(Game))
+    if (app.createWorldEvents) Object.assign(Game, app.createWorldEvents(Game))
+    if (app.createProgressionFeatureRenderer) Object.assign(Game, app.createProgressionFeatureRenderer(Game))
+    if (app.createRewardDialog) Object.assign(Game, app.createRewardDialog(Game))
 
     // Each entity receives the same game session; cross-entity references are
     // resolved when playing, after every constructor has been registered.

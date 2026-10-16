@@ -3,6 +3,8 @@
         player: 'src/assets/images/nave.png',
         enemy: 'src/assets/images/ovni.png',
         scout: 'src/assets/images/ovni2.png',
+        meteor: 'src/assets/images/meteor-realistic.png',
+        energyCapsule: 'src/assets/images/energy-capsule.png',
         explosion: 'src/assets/images/explosion.png'
     })
     const images = new Map()
@@ -35,7 +37,8 @@
             // Keep entities visible and playable while a sprite loads or fails.
             const name = names.get(image)
             ctx.save()
-            ctx.fillStyle = name === 'explosion' ? '#FF8C00' : name === 'player' ? '#00E1FF' : '#9B30FF'
+            ctx.fillStyle = name === 'explosion' ? '#FF8C00' : name === 'player' ? '#00E1FF'
+                : name === 'meteor' ? '#8B5A32' : name === 'energyCapsule' ? '#61F5FF' : '#9B30FF'
             ctx.beginPath()
             if (name === 'player') {
                 ctx.moveTo(x + width / 2, y)

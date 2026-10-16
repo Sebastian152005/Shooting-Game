@@ -1,6 +1,6 @@
 # Auditoría final del estado actual
 
-Fecha: 13 de octubre de 2026. Alcance: estructura, dependencias, lógica, recursos, interfaz, almacenamiento, servidor local y composición en Chromium. Las ideas de funcionalidades nuevas permanecen pendientes.
+Actualizada: 16 de octubre de 2026. Alcance: estructura, dependencias, lógica, recursos, interfaz, almacenamiento, servidor local y composición en Chromium.
 
 ## Organización y código
 
@@ -9,6 +9,12 @@ Fecha: 13 de octubre de 2026. Alcance: estructura, dependencias, lógica, recurs
 - Reglas internas ejecutables sin navegador; renderizado separado de actualización y entidades con identificadores de sprites.
 - Rutas actualizadas y fuente única de estilos CSS.
 - Reutilización de imágenes y medios, un solo bucle y protección ante diferencias negativas de tiempo.
+- Máquina de estados pura para el ciclo de oleadas y fixtures de prueba separadas de los casos de uso.
+- `GameSession` agrupado, puerto `InputState` compartido y controles táctiles accesibles.
+- Cápsulas de energía acumulable desde cero, pulso defensivo instantáneo contra proyectiles y meteoritos, primeros duelos de jefe limpios y ráfagas orbitales progresivas desde el tercero.
+- Energía ambiental independiente de enemigos, feedback sonoro diferenciado y meteoritos continuos con movimiento físico escalable.
+- Jefe con silueta reforzada, reactor animado, módulos laterales, anillos orbitales y vida segmentada.
+- Un único punto de entrada ES Module por página y grafo de imports comprobado.
 
 ## Regresiones comprobadas
 
@@ -26,16 +32,18 @@ Fecha: 13 de octubre de 2026. Alcance: estructura, dependencias, lógica, recurs
 
 ## Evidencia
 
-`npm test`: **92 pruebas** —80 de juego, 9 de estructura y 3 de servidor—, con escenarios determinados.
+`npm test`: **115 pruebas** —80 de regresión del juego, 5 de entrada, 3 de sesión, 7 de progresión, 4 de eventos ambientales, 2 del grafo ESM, 11 de estructura y 3 de servidor—, con escenarios determinados.
 
-El ensayo Chromium recorre menú, ajustes, inicio, pausa, audio, daño durante entrada, combate, tamaño 360 × 780 con densidad 2, supervivientes antes del jefe, Game Over, reinicio y retorno al menú. También abre `index.html` mediante `file:`, navega a la partida, comprueba su sprite y reinicia con Enter. Detecta excepciones JavaScript y recursos locales fallidos. El recorrido aprobado no registró ninguno. Las capturas quedan en `tests/artifacts/`.
+El ensayo Chromium recorre por HTTP el menú, ajustes, inicio, pausa, audio, controles táctiles accesibles, aparición y recolección ambiental de energía, sonidos diferenciados del pulso, caída continua y renderizado de meteoritos, jefe reforzado, combate, tamaño 360 × 780 con densidad 2, recompensa persistente, Game Over, reinicio y retorno al menú. Detecta excepciones JavaScript y recursos locales fallidos. Publica capturas únicamente cuando termina y registra el resultado en `tests/artifacts/browser-smoke-report.json`.
+
+La ejecución final en Chrome 155 completó el recorrido sin excepciones JavaScript ni recursos locales fallidos. El runner desactiva Graphite y sus cachés persistentes para evitar el conflicto de `DawnGraphiteCache` observado en entornos aislados, y conserva un reporte independiente de cualquier fallo de infraestructura.
 
 Comandos y requisitos en [README](../README.md); contratos en [arquitectura](arquitectura.md).
 
 ## Límites
 
-Estos resultados respaldan los casos cubiertos; no prueban todas las combinaciones, dispositivos o navegadores. Balance, diversión y lectura visual requieren más partidas reales. Chromium no certifica Safari o Firefox. No hay controles táctiles.
+Estos resultados respaldan los casos cubiertos; no prueban todas las combinaciones, dispositivos o navegadores. Balance, diversión y lectura visual requieren más partidas reales. Chromium no certifica Safari o Firefox. Los controles táctiles requieren validación adicional en dispositivos físicos.
 
-Los medios dependen del soporte y las políticas del navegador. La persistencia puede restringirse y bajo `file:` depende del navegador; se recomienda el servidor. El servidor incluido es de desarrollo.
+Los medios dependen del soporte y las políticas del navegador. La aplicación usa ES Modules y requiere HTTP. El servidor incluido es de desarrollo.
 
 No se declara funcionamiento al 100 %. El resultado es una organización verificable, correcciones concretas y una base de regresión reproducible.

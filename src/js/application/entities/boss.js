@@ -1,8 +1,8 @@
 (function (app) {
     app.entityFactories.Boss = function (Game) {
+        const config = Game.config.progression
         const Boss = function () {
             const d  = Game.difficulty
-            const config = Game.config.progression
             Game.beginBossEncounter()
             this.width    = 180
             this.height   = 110
@@ -10,17 +10,22 @@
             this.y        = -this.height
             this.entering = true
             this.dead     = false
-            this.hp       = Math.min(config.bossMaxHp, config.bossBaseHp + Math.max(0, Game.bossCount - 1) * 4)
+            this.hp       = Math.min(config.bossMaxHp, config.bossBaseHp
+                + Math.max(0, Game.bossCount - 1) * config.bossHpPerDefeat)
             this.maxHp    = this.hp
             this.speed    = Math.min(3.5, 1.8 + d * 0.08)
             this.bulletSpeed   = Math.min(config.maxBulletSpeed, 3.2 + d * 0.12)
-            this.shootInterval = Math.max(1.6, 3.2 - d * 0.06)
+            this.shootInterval = Math.max(config.bossMinimumShootInterval + 0.4,
+                config.bossShootInterval - d * 0.06)
             this.shootTimer    = 0
             this.phase = 1
             this.attackStep = 0
             this.warningTime = 0
             this.warningAngles = []
             this.warningFan = null
+            this.warningPattern = null
+            this.visualTime = 0
+            this.damageFlash = 0
             this.movingLeft    = Game.randomFloat() < 0.5
             this.sprite        = 'enemy'
             Game.bossActive    = true
@@ -33,9 +38,14 @@
 
         Boss.prototype.update = function () {
             if (this.dead || Game.paused || Game.isGameOver || Game.boss !== this) return
+            this.visualTime += Game.dt
+            this.damageFlash = Math.max(0, this.damageFlash - Game.dt)
             if (this.entering) {
                 this.y += 2.5 * Game.dt * 60
-                if (this.y >= 15) { this.y = 15; this.entering = false }
+                if (this.y >= config.bossTopMargin) {
+                    this.y = config.bossTopMargin
+                    this.entering = false
+                }
                 Game.resolvePlayerBulletHits(this)
                 return
             }
@@ -56,7 +66,8 @@
                 if (this.warningTime === 0) this.shoot()
             } else {
                 this.shootTimer += Game.dt
-                const interval = Math.max(1.1, this.shootInterval - (this.phase - 1) * 0.35)
+                const interval = Math.max(config.bossMinimumShootInterval,
+                    this.shootInterval - (this.phase - 1) * config.bossPhaseIntervalReduction)
                 if (this.shootTimer >= interval && this.prepareAttack()) {
                     this.shootTimer = 0
                 }
@@ -73,6 +84,7 @@
         Boss.prototype.receiveHit = function () {
             if (!this.canBeHit()) return false
             this.hp--
+            this.damageFlash = 0.12
             if (this.hp <= 0) this.die()
             return true
         }
@@ -87,24 +99,27 @@
             this.shootTimer = 0
             this.warningTime = 0
             this.warningAngles = []
+            this.warningPattern = null
         }
 
         Boss.prototype.prepareAttack = function () {
             if (this.warningTime > 0 || Game.safeCorridor || Game.paused || Game.isGameOver) return false
-            const aimed = this.phase >= 2 && this.attackStep % 2 === 1
+            const pattern = Game.rules.bossAttackPattern(this.phase, this.attackStep)
+            const aimed = pattern === Game.rules.BOSS_ATTACK_PATTERNS.AIMED
+                || pattern === Game.rules.BOSS_ATTACK_PATTERNS.CROSSFIRE
             const x = this.x + this.width / 2
             const y = this.y + this.height
             const aim = aimed ? Math.max(-0.55, Math.min(0.55,
                 Math.atan2(Game.player.x + Game.player.width / 2 - x, Game.player.y - y))) : 0
-            if (aimed) {
-                const offsets = this.phase === 3 ? [-0.24, -0.12, 0, 0.12, 0.24] : [-0.16, 0, 0.16]
-                this.warningAngles = offsets.map(offset => offset + aim)
-            } else {
+            if (pattern === Game.rules.BOSS_ATTACK_PATTERNS.FAN) {
                 this.warningFan = Game.reserveFan(this, x, y, this.bulletSpeed,
                     this.phase === 3 ? 3 : 2, Game.config.progression.bossWarning, this.attackStep)
                 if (!this.warningFan) return false
                 this.warningAngles = this.warningFan.angles
+            } else {
+                this.warningAngles = Game.rules.bossAttackAngles(pattern, aim, this.phase)
             }
+            this.warningPattern = pattern
             this.warningTime = Game.config.progression.bossWarning
             // Lock the origin while telegraphing so the announced lanes stay accurate.
             this.attackX = x
@@ -122,6 +137,7 @@
             }
             this.warningFan = null
             this.warningAngles = []
+            this.warningPattern = null
         }
 
         Boss.prototype.die = function () {

@@ -6,8 +6,8 @@
   "engines": { "node": ">=24" },
   "scripts": {
     "start": "node tools/serve.cjs",
-    "test": "node --test tests/game.test.cjs tests/project.test.cjs tests/server.test.cjs",
-    "check": "node --test tests/project.test.cjs",
+    "test": "node --test tests/game.test.cjs tests/input-state.test.cjs tests/module-graph.test.cjs tests/progression-features.test.cjs tests/project.test.cjs tests/server.test.cjs tests/session-state.test.cjs tests/world-events.test.cjs",
+    "check": "node --test tests/module-graph.test.cjs tests/project.test.cjs",
     "test:browser": "node tests/browser-smoke.cjs"
   }
 }
