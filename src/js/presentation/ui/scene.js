@@ -23,13 +23,14 @@
                 const ctx = this.ctx
                 this.clear()
                 this.drawVideo()
+                this.drawBossMeteorWarning?.()
                 ctx.save()
                 if (this.shakeTimer > 0 && !this.paused) {
                     const intensity = 8 * (this.shakeTimer / 0.3)
                     ctx.translate((Math.random() - 0.5) * intensity * 2,
                         (Math.random() - 0.5) * intensity * 2)
                 }
-                for (const collection of ['enemies', 'enemyBullets', 'bullets', 'powerUps', 'particles']) {
+                for (const collection of ['enemies', 'enemyBullets', 'bullets', 'meteors', 'powerUps', 'particles']) {
                     for (const entity of Object.values(this[collection])) entity.draw()
                 }
                 if (this.boss) this.boss.draw()

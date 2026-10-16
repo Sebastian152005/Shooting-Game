@@ -84,6 +84,7 @@
                     if (enemy.pendingAttack?.kind === 'fan') {
                         enemy.pendingAttack = null
                         enemy.shootTimer = 0
+                        enemy.setAIState(this.rules.ENEMY_AI_STATES.RECOVERY)
                     }
                 }
                 if (this.boss?.warningFan) {

@@ -3,6 +3,19 @@
     const clamp = (value, min, max) => Math.max(min, Math.min(max, value))
     const ease = value => (1 - Math.cos(Math.PI * clamp(value, 0, 1))) / 2
 
+    app.domain.enemyEntryMotion = function (start, target, elapsed, duration, index, sway, maxX) {
+        const progress = clamp(elapsed / Math.max(0.001, duration), 0, 1)
+        const eased = progress * progress * (3 - 2 * progress)
+        const direction = index % 2 === 0 ? 1 : -1
+        const arc = Math.sin(progress * Math.PI) * sway * direction
+        return {
+            x: clamp(start.x + (target.x - start.x) * eased + arc, 0, maxX),
+            y: start.y + (target.y - start.y) * eased,
+            progress,
+            done: progress === 1
+        }
+    }
+
     app.domain.enemyMotion = function (pattern, time, index, minY, maxY, config) {
         const span = Math.max(0, maxY - minY)
         const center = minY + span / 2
@@ -12,8 +25,8 @@
         }
         if (pattern === 'zigzag') {
             const phase = (time / config.zigzagPeriod) % 1
-            const triangle = phase < 0.5 ? phase * 2 : (1 - phase) * 2
-            return { y: minY + span * triangle, diving: false }
+            const direction = phase < 0.5 ? phase * 2 : (1 - phase) * 2
+            return { y: minY + span * ease(direction), diving: false }
         }
         if (pattern === 'diver') {
             const home = minY + Math.min(config.diveHomeOffset, span * 0.1)

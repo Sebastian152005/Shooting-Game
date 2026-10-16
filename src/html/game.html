@@ -9,7 +9,7 @@
     <link rel="stylesheet" href="src/css/game.css">
 </head>
 <body>
-    <canvas width="900" height="540" id="game" tabindex="0" aria-label="Zona de juego. Flechas o A y D para moverse; Espacio para disparar; P o Escape para pausar. Enter para reiniciar después de perder.">Tu navegador necesita soporte de Canvas para ejecutar el juego.</canvas>
+    <canvas width="900" height="540" id="game" tabindex="0" aria-label="Zona de juego. Flechas o A y D para moverse; Espacio para disparar; E para activar el pulso defensivo; P o Escape para pausar. Enter para reiniciar después de perder.">Tu navegador necesita soporte de Canvas para ejecutar el juego.</canvas>
     <dialog id="pauseMenu" class="pause-dialog" aria-labelledby="pauseTitle">
         <div class="pause-icon" aria-hidden="true"><span></span><span></span></div>
         <p class="pause-eyebrow">WAR IN SPACE</p>
@@ -18,37 +18,17 @@
         <button id="resumeGame" class="pause-resume" type="button" autofocus>Continuar <span aria-hidden="true">→</span></button>
         <details id="audioSettings" class="audio-settings" aria-label="Ajustes de sonido"></details>
     </dialog>
-    <script src="src/js/config.js"></script>
-    <script src="src/js/infrastructure/assets.js"></script>
-    <script src="src/js/infrastructure/browser.js"></script>
-    <script src="src/js/domain/geometry.js"></script>
-    <script src="src/js/domain/formation.js"></script>
-    <script src="src/js/domain/collision.js"></script>
-    <script src="src/js/domain/motion.js"></script>
-    <script src="src/js/domain/progression.js"></script>
-    <script src="src/js/infrastructure/storage.js"></script>
-    <script src="src/js/application/settings.js"></script>
-    <script src="src/js/presentation/ui/settings.js"></script>
-    <script src="src/js/application/game.js"></script>
-    <script src="src/js/application/progression.js"></script>
-    <script src="src/js/application/spawning.js"></script>
-    <script src="src/js/application/movement.js"></script>
-    <script src="src/js/application/simulation.js"></script>
-    <script src="src/js/application/attacks.js"></script>
-    <script src="src/js/presentation/viewport.js"></script>
-    <script src="src/js/infrastructure/input.js"></script>
-    <script src="src/js/infrastructure/audio.js"></script>
-    <script src="src/js/presentation/ui/hud.js"></script>
-    <script src="src/js/presentation/ui/scene.js"></script>
-    <script src="src/js/presentation/ui/entities.js"></script>
-    <script src="src/js/application/entities/player.js"></script>
-    <script src="src/js/application/entities/bullet.js"></script>
-    <script src="src/js/application/entities/enemy.js"></script>
-    <script src="src/js/application/entities/boss.js"></script>
-    <script src="src/js/application/entities/enemy-bullet.js"></script>
-    <script src="src/js/application/entities/particle.js"></script>
-    <script src="src/js/application/entities/power-up.js"></script>
-    <script src="src/js/application/entities/floating-text.js"></script>
-    <script src="src/js/bootstrap/game.js"></script>
+    <nav id="touchControls" class="touch-controls" aria-label="Controles táctiles">
+        <div class="touch-movement" role="group" aria-label="Movimiento">
+            <button type="button" data-input-action="moveLeft" aria-label="Mover nave a la izquierda">&#x2190;</button>
+            <button type="button" data-input-action="moveRight" aria-label="Mover nave a la derecha">&#x2192;</button>
+        </div>
+        <div class="touch-actions" role="group" aria-label="Acciones">
+            <button type="button" data-input-action="pulse" aria-label="Activar pulso defensivo">PULSO</button>
+            <button type="button" data-input-action="fire" aria-label="Disparar">FUEGO</button>
+        </div>
+        <button class="touch-pause" type="button" data-input-action="pause" aria-label="Pausar juego">&#x2016;</button>
+    </nav>
+    <script type="module" src="src/js/bootstrap/game-entry.js"></script>
 </body>
 </html>

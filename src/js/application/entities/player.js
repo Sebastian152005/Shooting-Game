@@ -5,9 +5,18 @@
             this.height       = 70
             this.x            = Game.view.width / 2 - this.width / 2
             this.y            = Game.view.height - this.height
-            this.movingLeft   = false
-            this.movingRight  = false
+            // Transitional aliases keep old integrations working while all input
+            // producers migrate to the application InputState port.
+            for (const [property, action] of [['movingLeft', 'moveLeft'], ['movingRight', 'moveRight']]) {
+                Object.defineProperty(this, property, {
+                    configurable: true,
+                    enumerable: true,
+                    get: () => Game.input?.isActive(action) || false,
+                    set: active => Game.input?.set(action, Boolean(active), 'legacy:' + property)
+                })
+            }
             this.speed        = 5
+            this.horizontalVelocity = 0
             this.shootCooldown = 0
             this.invincible      = false
             this.invincibleTimer = 0
@@ -37,9 +46,12 @@
         Player.prototype.update = function () {
             if (Game.paused || Game.isGameOver) return
             const move   = this.speed * Game.dt * 60
-            const moving = this.movingLeft || this.movingRight
+            const movingLeft = Game.input?.isActive('moveLeft') || false
+            const movingRight = Game.input?.isActive('moveRight') || false
+            const moving = movingLeft || movingRight
 
-            const direction = Number(this.movingRight) - Number(this.movingLeft)
+            const direction = Number(movingRight) - Number(movingLeft)
+            this.horizontalVelocity = direction * this.speed * 60
             this.x += direction * move
             this.x = Math.max(0, Math.min(Game.view.width - this.width, this.x))
 
@@ -68,7 +80,7 @@
             }
 
             this.shootCooldown -= Game.dt
-            if (Game.shooting && this.shootCooldown <= 0 && (!this.invincible || this.shield > 0)) this.shoot()
+            if (Game.input?.isActive('fire') && this.shootCooldown <= 0 && (!this.invincible || this.shield > 0)) this.shoot()
 
             for (let i in Game.enemyBullets) {
                 if (Game.collision(Game.enemyBullets[i], this) && !this.invincible) {

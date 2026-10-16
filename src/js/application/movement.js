@@ -16,6 +16,20 @@
                 enemy.entryY = start.y
                 enemy.homeY = start.home === undefined ? start.y : start.home
                 enemy.motionOriginY = enemy.entering ? start.y : Math.max(enemy.minY, Math.min(enemy.maxY, enemy.y))
+                if (enemy.entering) {
+                    enemy.entryElapsed = 0
+                    enemy.entryStartX = enemy.x
+                    enemy.entryStartY = enemy.y
+                    enemy.entryTargetX = enemy.x
+                    if (!enemy.entryPathBounds) {
+                        enemy.entryPathBounds = {
+                            x: enemy.x,
+                            y: Math.min(enemy.y, enemy.entryY),
+                            width: enemy.width,
+                            height: Math.abs(enemy.entryY - enemy.y) + enemy.height
+                        }
+                    }
+                }
             },
 
             reserveIncursion: function (enemy) {
@@ -43,7 +57,10 @@
                 const direction = enemy.movingLeft ? -1 : 1
                 let x = enemy.x
                 if (this.incursion?.owner !== enemy) {
-                    x += direction * enemy.speed * dt * 60
+                    const lateralScale = enemy.pattern === 'zigzag' ? 1.08
+                        : enemy.pattern === 'sine' ? 0.88
+                            : enemy.pattern === 'diver' && nextSample.diving ? 0.7 : 1
+                    x += direction * enemy.speed * lateralScale * dt * 60
                     if (x < 0 || x > this.view.width - enemy.width) {
                         enemy.movingLeft = !enemy.movingLeft
                         x = Math.max(0, Math.min(this.view.width - enemy.width, x))

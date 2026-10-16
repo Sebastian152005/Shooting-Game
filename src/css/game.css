@@ -16,6 +16,165 @@ canvas:focus-visible {
     outline-offset: -2px;
 }
 
+.boss-reward-dialog {
+    position: fixed;
+    inset: 0;
+    margin: auto;
+    width: min(520px, calc(100vw - 40px));
+    max-height: calc(100dvh - 32px);
+    overflow-y: auto;
+    padding: clamp(24px, 5vw, 40px);
+    border: 1px solid rgba(0, 225, 255, 0.3);
+    border-radius: 24px;
+    color: #f5faff;
+    text-align: center;
+    background: linear-gradient(155deg, #102738, #07101c 65%);
+    box-shadow: 0 24px 80px rgba(0, 0, 0, 0.6), 0 0 48px rgba(0, 225, 255, 0.12);
+    font-family: 'Lato', sans-serif;
+}
+
+.boss-reward-dialog::backdrop {
+    background: rgba(0, 5, 12, 0.72);
+    backdrop-filter: blur(5px);
+}
+
+.boss-reward-dialog h2 {
+    margin: 0;
+    color: #61f5ff;
+    font-size: clamp(28px, 6vw, 38px);
+    font-weight: 900;
+    letter-spacing: 0.03em;
+}
+
+.boss-reward-dialog > p {
+    margin: 12px 0 28px;
+    color: #a5b8c8;
+    font-size: 14px;
+    line-height: 1.5;
+}
+
+.boss-reward-option {
+    display: block;
+    width: 100%;
+    margin: 12px 0 0;
+    padding: 16px;
+    border: 1px solid rgba(97, 245, 255, 0.45);
+    border-radius: 10px;
+    color: #fff;
+    text-align: left;
+    background: linear-gradient(110deg, rgba(0, 225, 255, 0.08), rgba(56, 184, 255, 0.04));
+    cursor: pointer;
+    transition: border-color 150ms ease, background 150ms ease, transform 150ms ease;
+}
+
+.boss-reward-option:hover {
+    border-color: #61f5ff;
+    background: rgba(0, 225, 255, 0.16);
+    transform: translateY(-1px);
+}
+
+.boss-reward-option:focus-visible {
+    outline: 3px solid #ffd700;
+    outline-offset: 3px;
+}
+
+.boss-reward-option span {
+    display: block;
+    margin-top: 7px;
+    color: rgba(255, 255, 255, 0.75);
+}
+
+@media (max-height: 520px) {
+    .boss-reward-dialog {
+        padding: 20px;
+    }
+
+    .boss-reward-dialog > p {
+        margin-bottom: 16px;
+    }
+
+    .boss-reward-option {
+        padding: 12px 14px;
+    }
+}
+
+.touch-controls {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 8;
+    pointer-events: none;
+}
+
+.touch-controls button {
+    min-width: 56px;
+    min-height: 56px;
+    padding: 10px 14px;
+    border: 1px solid rgba(0, 225, 255, 0.7);
+    border-radius: 50%;
+    color: #f5faff;
+    background: rgba(5, 21, 33, 0.78);
+    box-shadow: 0 4px 22px rgba(0, 0, 0, 0.35);
+    font: 900 13px 'Lato', sans-serif;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+    pointer-events: auto;
+}
+
+.touch-controls button:active {
+    color: #051521;
+    background: #00e1ff;
+}
+
+.touch-controls button:focus-visible {
+    outline: 3px solid #ffd700;
+    outline-offset: 3px;
+}
+
+.touch-movement,
+.touch-actions {
+    position: absolute;
+    bottom: max(18px, env(safe-area-inset-bottom));
+    display: flex;
+    gap: 12px;
+}
+
+.touch-movement {
+    left: max(18px, env(safe-area-inset-left));
+}
+
+.touch-actions {
+    right: max(18px, env(safe-area-inset-right));
+}
+
+.touch-actions button {
+    min-width: 66px;
+}
+
+.touch-pause {
+    position: absolute;
+    top: max(14px, env(safe-area-inset-top));
+    left: 50%;
+    transform: translateX(-50%);
+}
+
+.pause-dialog[open] ~ .touch-controls {
+    visibility: hidden;
+}
+
+@media (any-pointer: coarse) {
+    .touch-controls {
+        display: block;
+    }
+
+    .audio-settings {
+        top: max(14px, env(safe-area-inset-top));
+        right: max(14px, env(safe-area-inset-right));
+        bottom: auto;
+    }
+}
+
 .pause-dialog .audio-settings {
     left: auto;
     right: 16px;

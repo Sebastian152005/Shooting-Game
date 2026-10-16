@@ -229,6 +229,7 @@
             updateScore: function () {
                 if (this.isGameOver) return
                 this.drawSafeCorridor()
+                this.drawDefensivePulse?.()
                 const ctx = this.ctx
                 const W   = this.view.width
                 const H   = this.view.height
@@ -273,6 +274,51 @@
                 // ── Power-ups (below left panel) ──────────────────────────
                 let puY = 74
                 const pl = this.player
+                if (Game.config.energy && this.rules.clampEnergy) {
+                    const energyConfig = Game.config.energy
+                    const energy = this.rules.clampEnergy(this.energy, energyConfig.minimum, energyConfig.maximum)
+                    const pulseCost = this.rewardEffects?.pulseCost ?? energyConfig.pulseCost
+                    const pickupAmount = energyConfig.pickupAmount
+                    const energyWidth = 132
+                    const chargeRatio = Math.max(0, Math.min(1, energy / pulseCost))
+                    const totalCapsules = Math.ceil(pulseCost / pickupAmount)
+                    const collectedCapsules = Math.min(totalCapsules, Math.floor(energy / pickupAmount))
+                    this.hudPanel(10, puY, 148, 48,
+                        chargeRatio >= 1 ? 'rgba(97,245,255,0.72)' : 'rgba(97,245,255,0.24)')
+                    ctx.save()
+                    ctx.font = 'bold 8px Lato, sans-serif'
+                    ctx.fillStyle = '#61F5FF'
+                    ctx.fillText('PULSO DEFENSIVO', 18, puY + 13)
+                    ctx.font = 'bold 7px Lato, sans-serif'
+                    ctx.textAlign = 'right'
+                    ctx.fillStyle = chargeRatio >= 1 ? '#FFFFFF' : 'rgba(255,255,255,0.65)'
+                    ctx.fillText(Math.round(chargeRatio * 100) + '%', 150, puY + 13)
+
+                    this._roundRect(18, puY + 19, energyWidth, 12, 6)
+                    ctx.fillStyle = 'rgba(255,255,255,0.08)'
+                    ctx.fill()
+                    ctx.strokeStyle = 'rgba(97,245,255,0.26)'
+                    ctx.lineWidth = 1
+                    ctx.stroke()
+                    if (chargeRatio > 0) {
+                        const gradient = ctx.createLinearGradient(18, 0, 18 + energyWidth, 0)
+                        gradient.addColorStop(0, '#00BFD8')
+                        gradient.addColorStop(1, '#9AFAFF')
+                        ctx.shadowColor = '#00E1FF'
+                        ctx.shadowBlur = chargeRatio >= 1 ? 10 : 4
+                        this.hudRoundRect(20, puY + 21,
+                            (energyWidth - 4) * chargeRatio, 8, 4, gradient)
+                        ctx.shadowBlur = 0
+                    }
+                    ctx.font = 'bold 7px Lato, sans-serif'
+                    ctx.textAlign = 'left'
+                    ctx.fillStyle = chargeRatio >= 1 ? '#BFFFFF' : 'rgba(255,255,255,0.55)'
+                    const pulseStatus = chargeRatio >= 1
+                        ? '[E] ACTIVAR' : 'RECOGE CAPSULAS  ' + collectedCapsules + '/' + totalCapsules
+                    ctx.fillText(pulseStatus, 18, puY + 41)
+                    ctx.restore()
+                    puY += 51
+                }
                 if (pl.rapidFire  > 0) puY = this.drawPowerUpHUD(10, puY, '⚡', 'RAPIDFIRE', pl.rapidFire,  6,   '#FF8C00')
                 if (pl.tripleShot > 0) puY = this.drawPowerUpHUD(10, puY, '⊕', 'TRIPLE',    pl.tripleShot, 6,   '#9B30FF')
                 if (pl.shield     > 0) puY = this.drawPowerUpHUD(10, puY, '◈', 'ESCUDO',    pl.shield,     5,   '#00BFFF')
@@ -302,7 +348,7 @@
                     const elapsed = this.bannerDuration - this.levelUpTimer
                     const alpha   = Math.max(0, Math.min(elapsed * 4, 1, this.levelUpTimer * 4))
                     const isBoss  = this.bossActive
-                    const recovering = this.waveStage === 'recovery'
+                    const recovering = this.waveStage === this.rules.WAVE_STAGES.RECOVERY
                     const accent = isBoss ? '#FF4D25' : recovering ? '#00E1FF' : '#FFD700'
                     const panelY = H / 2 - 44
                     ctx.save()
