@@ -24,5 +24,10 @@
             - (b.x - preferred.x) ** 2 - (b.y - preferred.y) ** 2)
         return candidates[0] || null
     }
-    app.domain.formation = Object.freeze({ overlaps, findPosition })
+
+    const findEntryRoute = (routes, occupied, gap, lateralEntryActive) => routes.find(route =>
+        !(lateralEntryActive && route.kind === 'side')
+        && !occupied.some(other => overlaps(route.path, other.entryPathBounds || other, gap))) || null
+
+    app.domain.formation = Object.freeze({ overlaps, findPosition, findEntryRoute })
 }(globalThis.ShootingGame))

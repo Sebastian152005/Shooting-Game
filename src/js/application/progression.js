@@ -5,6 +5,39 @@
         const stages = Game.rules.WAVE_STAGES
         const events = Game.rules.WAVE_EVENTS
         return {
+            combatTelemetry: function () {
+                return {
+                    hostileProjectiles: Object.keys(this.enemyBullets).length,
+                    meteors: Object.keys(this.meteors).length,
+                    enemies: Object.values(this.enemies).filter(enemy => !enemy.dead).length,
+                    enemyCapacity: Math.max(1, this.maxEnemies),
+                    damageTaken: this.life,
+                    maximumDamage: this.maxLives,
+                    recentDamageRemaining: this.recentDamageRemaining,
+                    timeSincePlayerHit: this.timeSincePlayerHit,
+                    smoothedPressure: this.combatPressure
+                }
+            },
+
+            currentCombatIntensity: function () {
+                return this.rules.combatIntensityProfile(this.progressionTime,
+                    Game.config.intensity, this.waveProfile?.maxChargedAttacks ?? 1,
+                    this.combatTelemetry())
+            },
+
+            recordPlayerDamage: function () {
+                this.recentDamageRemaining = Game.config.intensity.recentDamageWindow
+                this.timeSincePlayerHit = 0
+            },
+
+            updateCombatTelemetry: function (dt) {
+                this.recentDamageRemaining = Math.max(0, this.recentDamageRemaining - dt)
+                this.timeSincePlayerHit += dt
+                const target = this.rules.combatPressureTarget(this.combatTelemetry(), Game.config.intensity)
+                this.combatPressure = this.rules.smoothCombatPressure(this.combatPressure, target, dt,
+                    Game.config.intensity.smoothingResponse)
+            },
+
             applyWaveProfile: function () {
                 this.waveProfile = this.rules.progressionProfile(this.difficulty, this.config)
                 this.maxEnemies = this.waveProfile.maxEnemies
@@ -14,6 +47,7 @@
             updateProgression: function (dt) {
                 if (this.paused || this.isGameOver) return
                 this.updateEnergy?.(dt)
+                this.updateCombatTelemetry(dt)
                 if (this.waveStage === stages.INTRO) {
                     this.introRemaining = Math.max(0, this.introRemaining - dt)
                     if (this.introRemaining === 0) {
@@ -115,16 +149,24 @@
                 this.offerBossRewards?.()
             },
 
-            canPrepareEnemyAttack: function (actor) {
+            canPrepareEnemyAttack: function (actor, attackKind = null) {
+                const intensity = this.currentCombatIntensity()
+                const conflicting = actor && attackKind && this.rules.hasSpecialAttackConflict(
+                    { kind: attackKind, x: actor.x + actor.width / 2 },
+                    Object.values(this.enemies).filter(enemy => enemy !== actor && enemy.pendingAttack && !enemy.dead)
+                        .map(enemy => ({ kind: enemy.pendingAttack.kind, x: enemy.pendingAttack.x })),
+                    Game.config.progression.specialistAttackSeparation)
                 const available = [stages.WAVE, stages.BOSS_PENDING].includes(this.waveStage) && !this.paused && !this.isGameOver
                     && !this.safeCorridor
                     && this.enemyAttackCooldown === 0
-                    && Object.values(this.enemies).filter(enemy => enemy.pendingAttack && !enemy.dead).length < config.maxChargedAttacks
+                    && !conflicting
+                    && Object.values(this.enemies).filter(enemy => enemy.pendingAttack && !enemy.dead).length
+                        < intensity.specialAttackLimit
                 if (!available || !actor) return available
                 // Rotate among ready specialists, including unsuccessful fan attempts.
                 // A controller whose geometry is blocked cannot monopolize the turn.
                 const waiting = Object.values(this.enemies).some(enemy => enemy !== actor
-                    && !enemy.dead && !enemy.entering && enemy.role !== 'pressure'
+                    && !enemy.dead && !enemy.entering && !enemy.pendingAttack && enemy.role !== 'pressure'
                     && enemy.shootTimer >= enemy.shootInterval
                     && enemy.canAcquireTarget()
                     && (enemy.attackTurn < actor.attackTurn

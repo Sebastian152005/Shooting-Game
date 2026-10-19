@@ -79,17 +79,98 @@ test('domain policies run without a browser, Game session, renderer or storage',
             'domain must not depend on runtime adapters')
         vm.runInContext(source, context)
     }
-    const config = { maxEnemies: 6, progression: { maxEnemies: 10 } }
+    const config = { maxEnemies: 6, firstBossLevel: 5, progression: {
+        maxEnemies: 10, maxChargedAttacks: 2,
+        bossBaseHp: 28, bossHpPerLevel: 2, bossHpPerDefeat: 6, bossMaxHp: 120
+    } }
     const configBefore = JSON.stringify(config)
     const profile = app.domain.progressionProfile(8, config)
     assert.equal(profile.aggressors, true)
     assert.equal(profile.tracking, true)
     assert.equal(profile.precision, true)
     assert.equal(profile.maxEnemies, 9)
+    assert.equal(app.domain.progressionProfile(2, config).maxChargedAttacks, 1)
+    assert.equal(app.domain.progressionProfile(3, config).maxChargedAttacks, 2)
+    assert.equal(app.domain.bossHealth(5, 1, config), 28)
+    assert.equal(app.domain.bossHealth(9, 2, config), 42)
+    const intensityConfig = {
+        cycleDuration: 18, buildupEnd: 0.3, assaultEnd: 0.72,
+        buildupFireMultiplier: 1, assaultFireMultiplier: 0.78,
+        recoveryFireMultiplier: 1.22
+    }
+    assert.deepEqual(JSON.parse(JSON.stringify(app.domain.combatIntensityProfile(1, intensityConfig, 2))),
+        { phase: 'buildup', commonFireMultiplier: 1, specialAttackLimit: 1 })
+    assert.deepEqual(JSON.parse(JSON.stringify(app.domain.combatIntensityProfile(8, intensityConfig, 2))),
+        { phase: 'assault', commonFireMultiplier: 0.78, specialAttackLimit: 2 })
+    assert.deepEqual(JSON.parse(JSON.stringify(app.domain.combatIntensityProfile(16, intensityConfig, 2))),
+        { phase: 'recovery', commonFireMultiplier: 1.22, specialAttackLimit: 1 })
+    const adaptiveIntensity = {
+        ...intensityConfig, adaptive: true, overwhelmedThreshold: 0.58, dominantThreshold: 0.2,
+        dominanceDelay: 10, maximumCadenceRelief: 0.15, maximumCadencePressure: 0.1,
+        maximumBuildupExtension: 0.06, maximumBuildupReduction: 0.04,
+        maximumRecoveryExtension: 0.1, maximumAssaultExtension: 0.06
+    }
+    const relief = app.domain.combatIntensityProfile(12.5, adaptiveIntensity, 2, {
+        smoothedPressure: 0.9, timeSincePlayerHit: 0
+    })
+    assert.equal(relief.phase, 'recovery', 'high pressure brings the recovery window forward')
+    assert.equal(relief.adaptation, 'relief')
+    assert.equal(relief.specialAttackLimit, 1)
+    assert.ok(relief.commonFireMultiplier > intensityConfig.recoveryFireMultiplier)
+    const pressure = app.domain.combatIntensityProfile(5, adaptiveIntensity, 2, {
+        smoothedPressure: 0.05, timeSincePlayerHit: 14
+    })
+    assert.equal(pressure.phase, 'assault', 'sustained control advances the next pressure window')
+    assert.equal(pressure.adaptation, 'pressure')
+    assert.ok(pressure.commonFireMultiplier < intensityConfig.assaultFireMultiplier)
+    const telemetryTarget = app.domain.combatPressureTarget({
+        hostileProjectiles: 18, meteors: 4, enemies: 6, enemyCapacity: 6,
+        damageTaken: 3, maximumDamage: 5, recentDamageRemaining: 2
+    }, { projectileCapacity: 18, meteorCapacity: 4 })
+    assert.ok(telemetryTarget > 0.8 && telemetryTarget <= 1)
+    const smoothed = app.domain.smoothCombatPressure(0, telemetryTarget, 0.1, 1.8)
+    assert.ok(smoothed > 0 && smoothed < telemetryTarget, 'adaptation changes gradually instead of snapping')
     assert.equal(app.domain.enemyRolePreference(app.domain.progressionProfile(1, config), 3), 'pressure')
     assert.equal(app.domain.enemyRolePreference(app.domain.progressionProfile(2, config), 3), 'aggressor')
     assert.equal(app.domain.enemyRolePreference(app.domain.progressionProfile(4, config), 5), 'marksman')
     assert.equal(app.domain.enemyRolePreference(app.domain.progressionProfile(6, config), 0), 'controller')
+    assert.equal(app.domain.variedEnemyRolePreference(app.domain.progressionProfile(6, config), 0, 0), 'aggressor')
+    const levelOneProfile = app.domain.progressionProfile(1, config)
+    const levelTwoProfile = app.domain.progressionProfile(2, config)
+    assert.equal(app.domain.enemyEntryAllowsSide(levelOneProfile), false)
+    assert.equal(app.domain.enemyEntryAllowsSide(levelTwoProfile), true)
+    assert.equal(app.domain.enemyEntryRequiresSpecialist(levelOneProfile, 'side'), false)
+    assert.equal(app.domain.enemyEntryRequiresSpecialist(levelTwoProfile, 'side'), true)
+    assert.deepEqual(Array.from(app.domain.enemyEntryKindsForRole(levelTwoProfile, 'aggressor')), ['side'])
+    assert.deepEqual(Array.from(app.domain.enemyEntryKindsForRole(levelTwoProfile, 'pressure')), ['top'])
+    assert.deepEqual(Array.from(app.domain.enemyEntryKindsForRole(levelTwoProfile, 'marksman')), ['top'])
+    assert.equal(app.domain.enemyEntryDuration('top', 1, 1, 0.65, 0.95), 1)
+    assert.equal(app.domain.enemyEntryDuration('side', 1, 1, 0.65, 0.95), 0.65)
+    assert.equal(app.domain.enemyEntryDuration('side', 2, 1, 0.65, 0.95), 0.95)
+    assert.equal(app.domain.canUseEnemyEntry(levelOneProfile, 'side', [], 6, 2, 2), false)
+    assert.equal(app.domain.canUseEnemyEntry(levelTwoProfile, 'side', ['pressure'], 6, 2, 2), true)
+    assert.equal(app.domain.canUseEnemyEntry(levelTwoProfile, 'side',
+        ['aggressor', 'aggressor', 'pressure'], 6, 2, 2), false)
+    assert.equal(app.domain.enemyEntryRolePreference(levelOneProfile, 'pressure', 'side'), 'pressure')
+    assert.equal(app.domain.enemyEntryRolePreference(levelTwoProfile, 'pressure', 'top'), 'pressure')
+    assert.equal(app.domain.enemyEntryRolePreference(levelTwoProfile, 'pressure', 'side'), 'aggressor')
+    assert.equal(app.domain.canAssignEnemyRole('aggressor', ['pressure'], 6, 2, 2), true)
+    assert.equal(app.domain.canAssignEnemyRole('aggressor', ['aggressor', 'aggressor'], 6, 2, 2), false)
+    const cadenceTraits = Array.from({ length: 8 }, (_, index) => app.domain.enemyCadenceTrait(index, 0.12))
+    assert.ok(new Set(cadenceTraits).size > 1)
+    assert.ok(cadenceTraits.every(value => value >= 0.88 && value <= 1.12))
+    const movementTraits = Array.from({ length: 8 }, (_, index) => app.domain.enemyMovementTrait(index, 0.18))
+    assert.ok(new Set(movementTraits).size > 4)
+    assert.ok(movementTraits.every(value => value >= 0.82 && value <= 1.18))
+    const commonSignature = app.domain.enemyArchetypeSignature('pressure')
+    const aggressorSignature = app.domain.enemyArchetypeSignature('aggressor')
+    const marksmanSignature = app.domain.enemyArchetypeSignature('marksman')
+    const controllerSignature = app.domain.enemyArchetypeSignature('controller')
+    assert.ok(aggressorSignature.movementScale > commonSignature.movementScale)
+    assert.ok(marksmanSignature.entrySwayScale < commonSignature.entrySwayScale)
+    assert.ok(controllerSignature.entrySwayScale > commonSignature.entrySwayScale)
+    assert.equal(new Set([commonSignature.bankScale, aggressorSignature.bankScale,
+        marksmanSignature.bankScale, controllerSignature.bankScale]).size, 4)
     const aiState = app.domain.ENEMY_AI_STATES
     let awareness = app.domain.advanceEnemyAI({ state: aiState.PATROL }, {
         entering: false, ready: true, detected: true, dt: 0.1, acquisitionDuration: 0.24
@@ -105,6 +186,57 @@ test('domain policies run without a browser, Game session, renderer or storage',
     const stableMemory = app.domain.rememberEnemyTarget(firstMemory, { x: 14, y: 20, horizontalVelocity: -60 })
     assert.equal(stableMemory.x, 14)
     assert.ok(stableMemory.horizontalVelocity > -60 && stableMemory.horizontalVelocity < 60)
+    assert.equal(app.domain.combatDirective({ phase: 'assault', adaptation: 'neutral' }), 'press')
+    assert.equal(app.domain.combatDirective({ phase: 'assault', adaptation: 'relief' }), 'recover')
+    const unawareIntent = app.domain.decideEnemyIntent({
+        role: 'pressure', directive: 'position', originX: 200, movingLeft: false,
+        index: 0, viewportWidth: 900, enemyWidth: 100
+    })
+    assert.deepEqual(JSON.parse(JSON.stringify(unawareIntent)),
+        { mode: 'patrol', desiredX: null, movingLeft: false, movementMultiplier: 1 })
+    const commonIntent = app.domain.decideEnemyIntent({
+        role: 'pressure', directive: 'press', originX: 200, targetX: 300,
+        targetVelocity: 100, readiness: 0.8, readinessThreshold: 0.68,
+        pressMovementMultiplier: 1.22,
+        movingLeft: true, index: 0, viewportWidth: 900, enemyWidth: 100
+    })
+    assert.equal(commonIntent.mode, 'press')
+    assert.equal(commonIntent.desiredX, null)
+    assert.equal(commonIntent.movingLeft, true)
+    assert.equal(commonIntent.movementMultiplier, 1.22)
+    const settledIntent = app.domain.decideEnemyIntent({
+        role: 'pressure', directive: 'press', originX: 300, targetX: 300,
+        movingLeft: true, index: 1, viewportWidth: 900, enemyWidth: 100,
+        deadzone: 12, readiness: 1, readinessThreshold: 0.68
+    })
+    assert.equal(settledIntent.desiredX, null)
+    assert.equal(settledIntent.movingLeft, true)
+    const waitingSpecialist = app.domain.decideEnemyIntent({
+        role: 'controller', directive: 'press', originX: 300, targetX: 500,
+        readiness: 0.2, positioningReadiness: 0.58,
+        movingLeft: false, index: 2, viewportWidth: 900, enemyWidth: 100
+    })
+    assert.equal(waitingSpecialist.mode, 'patrol')
+    assert.equal(waitingSpecialist.desiredX, null)
+    const aggressorIntent = app.domain.decideEnemyIntent({
+        role: 'aggressor', aiState: aiState.RECOVERY, directive: 'press',
+        originX: 400, targetX: 450, movingLeft: false, index: 2,
+        viewportWidth: 900, enemyWidth: 100
+    })
+    assert.equal(aggressorIntent.mode, 'recover')
+    assert.equal(aggressorIntent.movingLeft, true)
+    assert.equal(app.domain.hasSpecialAttackConflict({ kind: 'tracking', x: 200 },
+        [{ kind: 'tracking', x: 300 }, { kind: 'aimed', x: 210 }], 170), true)
+    assert.equal(app.domain.hasSpecialAttackConflict({ kind: 'tracking', x: 200 },
+        [{ kind: 'tracking', x: 400 }, { kind: 'aimed', x: 210 }], 170), false)
+    assert.deepEqual(JSON.parse(JSON.stringify(app.domain.enemyTrafficPlan({
+        actorIndex: 4, blockerIndex: 2, actorX: 250, actorCenter: 300,
+        blockerCenter: 360, maximumX: 800, clearance: 112
+    }))), { yields: true, horizontalDirection: -1, verticalDirection: -1 })
+    assert.equal(app.domain.enemyTrafficPlan({
+        actorIndex: 1, blockerIndex: 5, actorX: 250, actorCenter: 300,
+        blockerCenter: 360, maximumX: 800, clearance: 112
+    }).yields, false)
     assert.equal(JSON.stringify(config), configBefore)
     const occupied = [{ x: 0, y: 78, width: 100, height: 60 }]
     const before = JSON.stringify(occupied)
@@ -112,6 +244,14 @@ test('domain policies run without a browser, Game session, renderer or storage',
         { left: 0, right: 360, top: 78, bottom: 282 }, occupied, { x: 0, y: 78 }, 12)
     assert.ok(position)
     assert.equal(app.domain.formation.overlaps(position, occupied[0], 12), false)
+    const routes = [
+        { kind: 'top', path: { x: 0, y: 0, width: 100, height: 200 } },
+        { kind: 'side', path: { x: 220, y: 80, width: 200, height: 60 } }
+    ]
+    assert.equal(app.domain.formation.findEntryRoute(routes,
+        [{ x: 0, y: 0, width: 100, height: 200 }], 0, true), null)
+    assert.equal(app.domain.formation.findEntryRoute(routes,
+        [{ x: 0, y: 0, width: 100, height: 200 }], 0, false).kind, 'side')
     assert.equal(JSON.stringify(occupied), before)
 })
 
@@ -134,9 +274,24 @@ test('boss attack policy preserves the classic spread and adds a deterministic c
     const context = vm.createContext({ ShootingGame: app })
     vm.runInContext(fs.readFileSync(path.join(root, 'src/js/domain/boss-attacks.js'), 'utf8'), context)
     const pattern = app.domain.BOSS_ATTACK_PATTERNS
+    assert.equal(app.domain.bossAttackPattern(1, 0), pattern.CLASSIC)
+    assert.equal(app.domain.bossAttackPattern(1, 1), pattern.AIMED)
     assert.equal(app.domain.bossAttackPattern(1, 99), pattern.CLASSIC)
     assert.equal(app.domain.bossAttackPattern(2, 0), pattern.FAN)
     assert.equal(app.domain.bossAttackPattern(2, 1), pattern.AIMED)
+    assert.equal(app.domain.bossAttackPattern(2, 2), pattern.CLASSIC)
+    assert.equal(app.domain.bossAttackRequiresWarning(pattern.CLASSIC), false)
+    assert.equal(app.domain.bossAttackRequiresWarning(pattern.AIMED), true)
+    const openingMovement = app.domain.bossMovementPlan({
+        phase: 1, step: 0, playerX: 450, viewportWidth: 900, bossWidth: 180
+    })
+    const enragedMovement = app.domain.bossMovementPlan({
+        phase: 3, step: 1, playerX: 450, playerVelocity: 120,
+        viewportWidth: 900, bossWidth: 180
+    })
+    assert.ok(openingMovement.targetX < 180)
+    assert.ok(enragedMovement.targetX > 450)
+    assert.ok(enragedMovement.speedMultiplier > openingMovement.speedMultiplier)
     assert.deepEqual(Array.from([0, 1, 2], step => app.domain.bossAttackPattern(3, step)),
         [pattern.FAN, pattern.AIMED, pattern.CROSSFIRE])
     assert.deepEqual(Array.from(app.domain.bossAttackAngles(pattern.CLASSIC)),
@@ -189,16 +344,43 @@ test('motion policies produce smooth, bounded patrol paths and off-screen arriva
     assert.equal(JSON.stringify(start), JSON.stringify({ x: 100, y: -72, progress: 0, done: false }))
     assert.ok(middle.x > 100 && middle.y > -72 && middle.y < 90)
     assert.equal(JSON.stringify(end), JSON.stringify({ x: 100, y: 90, progress: 1, done: true }))
+    const lateralStart = app.domain.enemyEntryMotion({ x: -112, y: 100 }, { x: 80, y: 100 }, 0, 1, 0, 28, 800)
+    const lateralMiddle = app.domain.enemyEntryMotion({ x: -112, y: 100 }, { x: 80, y: 100 }, 0.5, 1, 0, 28, 800)
+    const lateralEnd = app.domain.enemyEntryMotion({ x: -112, y: 100 }, { x: 80, y: 100 }, 1, 1, 0, 28, 800)
+    assert.equal(lateralStart.x, -112, 'lateral arrivals remain off screen at the start')
+    assert.ok(lateralMiddle.x > lateralStart.x && lateralMiddle.x < lateralEnd.x)
+    assert.equal(lateralEnd.x, 80)
 })
 
-test('targeting gates straight fire by lane and bounded homing converges without snapping', () => {
+test('targeting uses normalized awareness, predictive straight fire and bounded homing', () => {
     const app = {}
     const context = vm.createContext({ ShootingGame: app })
     vm.runInContext(fs.readFileSync(path.join(root, 'src/js/domain/targeting.js'), 'utf8'), context)
     const player = { x: 300, y: 400, width: 70, height: 70 }
-    assert.equal(app.domain.targetInFiringLane({ x: 335, y: 100 }, player, 48), true)
-    assert.equal(app.domain.targetInFiringLane({ x: 200, y: 100 }, player, 48), false)
-    assert.equal(app.domain.targetInFiringLane({ x: 335, y: 500 }, player, 48), false)
+    const awareness = app.domain.targetAwareness({ x: 100, y: 100 }, player, 500, 600)
+    const scaledAwareness = app.domain.targetAwareness({ x: 200, y: 200 },
+        { x: 600, y: 800, width: 140, height: 140 }, 1000, 1200)
+    assert.equal(awareness.detected, true)
+    assert.ok(Math.abs(awareness.confidence - scaledAwareness.confidence) < 0.000001,
+        'sensor confidence is independent from physical pixel dimensions')
+    const crossing = app.domain.straightShotOpportunity({
+        originX: 378, targetX: 335, targetVelocity: 180, stability: 0.8, observations: 3,
+        verticalDistance: 300, projectileSpeed: 4, targetWidth: 70,
+        viewportWidth: 900, toleranceRatio: 0.045, engagementRatio: 0.1, maximumLead: 0.32
+    })
+    const escaping = app.domain.straightShotOpportunity({
+        originX: 100, targetX: 600, targetVelocity: 180, stability: 0.8, observations: 3,
+        verticalDistance: 300, projectileSpeed: 4, targetWidth: 70,
+        viewportWidth: 900, toleranceRatio: 0.045, engagementRatio: 0.1, maximumLead: 0.32
+    })
+    const unstable = app.domain.straightShotOpportunity({
+        originX: 378, targetX: 335, targetVelocity: -180, stability: 0.2, observations: 1,
+        verticalDistance: 300, projectileSpeed: 4, targetWidth: 70,
+        viewportWidth: 900, toleranceRatio: 0.045, engagementRatio: 0.1, maximumLead: 0.32
+    })
+    assert.equal(crossing.canFire, true)
+    assert.equal(escaping.canFire, false)
+    assert.equal(unstable.canFire, false, 'a direction change must be observed before trusting it')
     assert.ok(Math.abs(app.domain.steerLateral(0, 100, 500, 0.1, 4.2, 2.25) - 0.42) < 0.000001)
     assert.equal(app.domain.steerLateral(2.2, 100, 500, 1, 4.2, 2.25), 2.25)
     assert.deepEqual(JSON.parse(JSON.stringify(app.domain.predictHorizontalIntercept({

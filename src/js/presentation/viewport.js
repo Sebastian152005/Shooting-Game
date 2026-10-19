@@ -40,11 +40,19 @@
                     entity.x *= scaleX
                     entity.y *= scaleY
                 }
-                for (const collection of ['enemies', 'bullets', 'enemyBullets', 'particles', 'powerUps', 'floatingTexts']) {
+                for (const collection of ['enemies', 'bullets', 'enemyBullets', 'meteors', 'particles', 'powerUps', 'floatingTexts']) {
                     for (const entity of Object.values(this[collection])) relocate(entity)
                 }
+                for (const meteor of Object.values(this.meteors)) {
+                    meteor.x = Math.max(0, Math.min(this.view.width - meteor.width, meteor.x))
+                }
+                for (const powerUp of Object.values(this.powerUps)) {
+                    const halfWidth = powerUp.width / 2
+                    powerUp.x = Math.max(halfWidth, Math.min(this.view.width - halfWidth, powerUp.x))
+                }
                 for (const enemy of Object.values(this.enemies)) {
-                    enemy.maxY = this.enemyBounds(enemy.pattern === 'diver', enemy.profile.level).bottom - enemy.height
+                    enemy.maxY = this.enemyBounds(enemy.pattern === 'diver' || enemy.isAggressor || enemy.isMarksman,
+                        enemy.profile.level).bottom - enemy.height
                     enemy.x = Math.max(0, Math.min(this.view.width - enemy.width, enemy.x))
                     if (enemy.pendingAttack) {
                         const attack = enemy.pendingAttack
@@ -52,7 +60,13 @@
                         attack.y = enemy.y + enemy.height
                         attack.targetX *= scaleX
                         attack.targetY *= scaleY
-                        attack.angle = Math.atan2(attack.targetX - attack.x, attack.targetY - attack.y)
+                        // Only the marksman's locked trajectory is diagonal.
+                        // Aggressor rounds must still launch vertically before
+                        // their short steering window, even after a resize.
+                        if (attack.kind === 'aimed') {
+                            attack.angle = Math.atan2(attack.targetX - attack.x,
+                                attack.targetY - attack.y)
+                        }
                     }
                 }
                 this.separateEnemiesAfterResize()

@@ -185,6 +185,8 @@ function setup({ blockedStorage = false, storedScore = null, imageStatus = 'load
             enemy.y = position.y
             enemy.homeY = enemy.y
             enemy.entering = false
+            enemy.entryKind = null
+            enemy.entryPathBounds = null
         }
         Game.refreshEnemyCount()
     }

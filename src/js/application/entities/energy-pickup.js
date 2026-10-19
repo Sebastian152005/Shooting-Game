@@ -20,8 +20,9 @@
 
         EnergyPickup.prototype.update = function () {
             this.pulse += Game.dt * 5
-            this.rotation = (this.rotation + Game.dt * Game.config.energy.capsuleRotationSpeed)
-                % (Math.PI * 2)
+            // Keep an accumulated phase: the counter-rotating ring derives a
+            // fractional angle from this value and would jump if it wrapped at 2PI.
+            this.rotation += Game.dt * Game.config.energy.capsuleRotationSpeed
             this.y += this.vy * Game.dt * 60
             if (this.y > Game.view.height + this.height) {
                 delete Game.powerUps[this.id]

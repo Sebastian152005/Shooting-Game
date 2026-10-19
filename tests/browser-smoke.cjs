@@ -109,11 +109,17 @@ async function main() {
         await waitFor('!!window.ShootingGame?.game')
         const initial = await evaluate(`(() => { const g = window.ShootingGame.game; return { enemies: Object.keys(g.enemies).length,
             intro: g.waveStage, energy: g.energy, volume: g.audio.volume,
+            introDuration: g.config.progression.introDuration,
+            entryDuration: g.config.motion.entryDuration,
+            levelThreeCharges: g.rules.progressionProfile(3, g.config).maxChargedAttacks,
             width: g.c.width, cssWidth: g.c.getBoundingClientRect().width } })()`)
         assert.equal(initial.enemies, 0)
         assert.equal(initial.intro, 'intro')
         assert.equal(initial.energy, 0)
         assert.equal(initial.volume, 0.27)
+        assert.equal(initial.introDuration, 1.2)
+        assert.equal(initial.entryDuration, 1)
+        assert.equal(initial.levelThreeCharges, 2)
         assert.ok(initial.width >= initial.cssWidth)
         assert.equal(await evaluate("document.getElementById('audioSettings').getClientRects().length"), 0,
             'sound controls are unavailable during play')
@@ -159,10 +165,12 @@ async function main() {
             const e = Object.values(g.enemies).find(e => !e.entering && e.role === 'pressure');
             g.enemyBullets = {}; g.safeCorridor = null;
             e.x = 0; g.player.x = g.view.width / 2;
+            const rejectedOutsideRadar = !e.shoot() && Object.keys(g.enemyBullets).length === 0;
+            e.x = g.player.x + g.player.width / 2 - e.width / 2;
             const fired = e.shoot(); const bullet = Object.values(g.enemyBullets)[0];
-            return fired && bullet.vx === 0 && !bullet.homing
+            return rejectedOutsideRadar && fired && bullet.vx === 0 && !bullet.homing
                 && bullet.attackType === 'common' && bullet.color === g.config.enemyAttackColors.common;
-        })()`), true, 'common UFOs maintain steady straight green laser pressure')
+        })()`), true, 'common UFOs predict a useful crossing before firing straight green lasers')
         const precisionState = await evaluate(`(() => { const g = window.ShootingGame.game;
             g.difficulty = 4; g.applyWaveProfile(); g.safeCorridor = null; g.enemyAttackCooldown = 0;
             for (const e of Object.values(g.enemies)) { e.pendingAttack = null; e.shootTimer = 0; }
@@ -173,7 +181,8 @@ async function main() {
             g.player.horizontalVelocity = g.player.speed * 60;
             const playerCenter = g.player.x + g.player.width / 2;
             e.setAIState(g.rules.ENEMY_AI_STATES.PATROL);
-            e.updateAI(0.01);
+            const perceived = e.updatePerception(0.01);
+            e.updateAI(0.01, perceived);
             const acquired = e.ai.state === g.rules.ENEMY_AI_STATES.ACQUIRING
                 && e.ai.lastKnownTarget !== null;
             const fired = e.role === 'marksman' && e.shoot();
@@ -200,7 +209,7 @@ async function main() {
             const enemies = Object.values(g.enemies); return enemies.every((a,i) => enemies.slice(i+1).every(b => !f.overlaps(a,b,11.99))); })()`), true)
         const combatScreenshot = await command('Page.captureScreenshot', { format: 'png' })
         screenshots.set('browser-combat.png', Buffer.from(combatScreenshot.data, 'base64'))
-        assert.equal(await evaluate(`(() => { const g = window.ShootingGame.game;
+        const bossState = await evaluate(`(() => { const g = window.ShootingGame.game;
             if (g.paused) g.continued();
             g.shooting = false; g.nextBossAt = g.difficulty + 1;
             if (!Object.keys(g.enemies).length) new g.entities.Enemy({ x: 100, y: 80 });
@@ -214,13 +223,30 @@ async function main() {
             for (const e of survivors) e.die();
             g.updateProgression(0);
             if (!g.boss || g.waveStage !== 'boss') return 'boss did not enter: paused=' + g.paused;
+            const previousDt = g.dt;
+            g.boss.entering = false;
+            g.boss.y = g.config.progression.bossTopMargin;
+            g.boss.hp = Math.ceil(g.boss.maxHp * 0.6); g.boss.updatePhase();
+            g.boss.attackStep = 1; g.safeCorridor = null;
+            const aimed = g.boss.prepareAttack();
+            const lockedAngles = [...g.boss.warningAngles];
+            const lockedRemaining = g.boss.warningTime;
             g.boss.hp = Math.ceil(g.boss.maxHp * 0.2); g.boss.updatePhase();
+            const committedAfterPhase = aimed && g.boss.warningTime === lockedRemaining
+                && JSON.stringify(g.boss.warningAngles) === JSON.stringify(lockedAngles);
+            g.dt = lockedRemaining; g.boss.update(); g.enemyBullets = {};
             g.boss.attackStep = 2; g.safeCorridor = null;
             const combined = g.boss.prepareAttack();
-            return g.boss.phase === 3 && combined && g.boss.warningPattern === 'crossfire'
-                && g.boss.warningAngles.length === 7 && g.safeCorridor === null
-                && !Object.values(g.floatingTexts).some(t => t.text.includes('FASE'));
-        })()`), true, 'boss transition preserves the classic encounter and unlocks warned crossfire')
+            const result = { phase: g.boss.phase, combined,
+                pattern: g.boss.warningPattern, angleCount: g.boss.warningAngles.length,
+                safe: g.safeCorridor === null, committedAfterPhase,
+                hiddenPhaseLabel: !Object.values(g.floatingTexts).some(t => t.text.includes('FASE')) };
+            g.dt = previousDt;
+            return result;
+        })()`)
+        assert.deepEqual(bossState, { phase: 3, combined: true, pattern: 'crossfire', angleCount: 7,
+            safe: true, committedAfterPhase: true, hiddenPhaseLabel: true },
+        'boss transition preserves the classic encounter and unlocks warned crossfire')
         const worldEvents = await evaluate(`(() => { const g = window.ShootingGame.game;
             const sounds = [];
             g.__smokeSounds = sounds;
@@ -240,6 +266,10 @@ async function main() {
             pickup.update();
             const capsuleRotated = Math.abs(pickup.rotation
                 - g.config.energy.capsuleRotationSpeed * 0.5) < 0.000001;
+            pickup.rotation = Math.PI * 2 - 0.01;
+            g.dt = 0.1;
+            pickup.update();
+            const capsuleRotationContinuous = pickup.rotation > Math.PI * 2;
             pickup.x = g.player.x + g.player.width / 2;
             pickup.y = g.player.y + g.player.height / 2;
             g.dt = 0;
@@ -250,11 +280,12 @@ async function main() {
                 configuredCost: g.rewardEffects.pulseCost,
                 energyPickups: Object.values(g.powerUps).filter(item => item.isEnergyPickup).length,
                 meteorsAdded: Object.keys(g.meteors).length - meteorsBefore,
-                bossSuppressed, capsuleRotated };
+                bossSuppressed, capsuleRotated, capsuleRotationContinuous };
         })()`)
         assert.deepEqual(worldEvents, { energy: 40, pickupSound: true,
             configuredPickup: 20, configuredCost: 100, energyPickups: 0,
-            meteorsAdded: 0, bossSuppressed: true, capsuleRotated: true })
+            meteorsAdded: 0, bossSuppressed: true, capsuleRotated: true,
+            capsuleRotationContinuous: true })
         await evaluate(`(() => { const g = window.ShootingGame.game;
             g.bossCount = 3;
             g.meteorSpawnRemaining = 0;

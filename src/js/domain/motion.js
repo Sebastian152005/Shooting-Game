@@ -8,8 +8,13 @@
         const eased = progress * progress * (3 - 2 * progress)
         const direction = index % 2 === 0 ? 1 : -1
         const arc = Math.sin(progress * Math.PI) * sway * direction
+        // Lateral routes begin wholly outside the viewport. Preserve that
+        // off-screen segment instead of snapping the hull onto the first pixel.
+        const minimumEntryX = Math.min(0, start.x, target.x)
+        const maximumEntryX = Math.max(maxX, start.x, target.x)
         return {
-            x: clamp(start.x + (target.x - start.x) * eased + arc, 0, maxX),
+            x: clamp(start.x + (target.x - start.x) * eased + arc,
+                minimumEntryX, maximumEntryX),
             y: start.y + (target.y - start.y) * eased,
             progress,
             done: progress === 1

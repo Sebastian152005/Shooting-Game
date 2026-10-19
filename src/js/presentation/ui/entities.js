@@ -79,14 +79,18 @@
             ctx.translate(centerX, centerY)
             ctx.rotate(this.bank || 0)
             if (this.entering) {
-                const arrival = Math.max(0, Math.min(1, this.entryElapsed / Game.config.motion.entryDuration))
+                const entryColor = this.role === 'aggressor' ? '#FF6347'
+                    : this.role === 'marksman' ? '#FFB347'
+                        : this.role === 'controller' ? '#32D5FF' : '#59FF78'
+                const arrival = Math.max(0, Math.min(1,
+                    this.entryElapsed / (this.entryDuration || Game.config.motion.entryDuration)))
                 const depthScale = 0.82 + arrival * 0.18
-                ctx.shadowColor = '#66E8FF'
+                ctx.shadowColor = entryColor
                 ctx.shadowBlur = 12 + (1 - arrival) * 16
                 const trail = ctx.createLinearGradient(0, -this.height * 0.2, 0, -this.height * 0.9)
-                trail.addColorStop(0, 'rgba(97,245,255,0.42)')
-                trail.addColorStop(0.45, 'rgba(55,157,194,0.14)')
-                trail.addColorStop(1, 'rgba(97,245,255,0)')
+                trail.addColorStop(0, entryColor + 'A8')
+                trail.addColorStop(0.45, entryColor + '38')
+                trail.addColorStop(1, entryColor + '00')
                 ctx.save()
                 ctx.globalCompositeOperation = 'screen'
                 ctx.globalAlpha = 0.7
@@ -201,7 +205,8 @@
                     : ['#E4FFE9', '#59FF78', '#1B6030']
             ctx.save()
             ctx.globalAlpha = this.entering
-                ? Math.max(0.35, Math.min(1, this.entryElapsed / Game.config.motion.entryDuration))
+                ? Math.max(0.35, Math.min(1,
+                    this.entryElapsed / (this.entryDuration || Game.config.motion.entryDuration)))
                 : 1
             // A restrained underbody wash ties each color to propulsion and
             // weapon hardware without recoloring the original UFO artwork.
@@ -529,9 +534,17 @@
                 bodyColor = 'rgba(25,177,226,0.94)'
                 coreColor = '#E6FBFF'
             } else if (isBoss) {
-                glowColor = '#FF2200'
-                bodyColor = `rgba(255,${Math.min(255, 40 + d * 8)},0,0.95)`
-                coreColor = '#FFFAE0'
+                const aimedBoss = this.attackType === 'boss-aimed'
+                const fanBoss = this.attackType === 'boss-fan'
+                const crossfireBoss = this.attackType === 'boss-crossfire'
+                glowColor = aimedBoss ? '#FF4F9A' : fanBoss ? '#FF9A3D'
+                    : crossfireBoss ? '#FF3158' : '#FF2200'
+                bodyColor = aimedBoss ? 'rgba(255,58,132,0.95)'
+                    : fanBoss ? 'rgba(255,126,35,0.95)'
+                        : crossfireBoss ? 'rgba(255,35,74,0.95)'
+                            : `rgba(255,${Math.min(255, 40 + d * 8)},0,0.95)`
+                coreColor = aimedBoss ? '#FFE5F1' : fanBoss ? '#FFF0D0'
+                    : crossfireBoss ? '#FFE1E7' : '#FFFAE0'
             } else if (isAggressor) {
                 glowColor = '#FF7020'
                 bodyColor = `rgba(255,${Math.min(255, 75 + d * 7)},15,0.9)`

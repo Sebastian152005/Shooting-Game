@@ -39,13 +39,19 @@ test('session state factory is pure and creates independent mutable sessions', (
     assert.equal(first.lifecycle.maxLives, 5)
     assert.equal(first.progression.waveStage, 'intro')
     assert.equal(first.progression.introRemaining, 3)
+    assert.equal(first.progression.combatPressure, 0)
+    assert.equal(first.progression.recentDamageRemaining, 0)
+    assert.equal(first.progression.timeSincePlayerHit, 0)
+    assert.equal(first.progression.nextLateralEntrySide, 'left')
     assert.equal(first.bossEncounter.nextAt, 5)
     assert.equal(first.effects.deltaTime, 1 / 60)
     assert.notEqual(first, second)
     assert.notEqual(first.collections, second.collections)
     assert.notEqual(first.collections.pendingSpawns, second.collections.pendingSpawns)
     first.collections.bullets.one = {}
+    first.progression.nextLateralEntrySide = 'right'
     assert.equal(second.collections.bullets.one, undefined)
+    assert.equal(second.progression.nextLateralEntrySide, 'left')
 })
 
 test('flat compatibility properties and grouped session state stay synchronized', () => {

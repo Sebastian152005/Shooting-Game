@@ -18,6 +18,7 @@ const graphs = {
             '../domain/collision.js',
             '../domain/motion.js',
             '../domain/targeting.js',
+            '../domain/combat-intensity.js',
             '../domain/progression.js',
             '../domain/enemy-archetypes.js',
             '../domain/enemy-ai.js',

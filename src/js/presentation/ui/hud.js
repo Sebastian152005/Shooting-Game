@@ -172,6 +172,66 @@
                 ctx.restore()
             },
 
+            drawPulseChargeBar: function (x, y, width, height, chargeRatio) {
+                const ctx = this.ctx
+                const ratio = Math.max(0, Math.min(1, chargeRatio))
+                const ready = ratio >= 1
+                const radius = height / 2
+                const pulse = ready ? 0.72 + Math.sin(this.elapsedTime * 5) * 0.18 : 0.45
+
+                ctx.save()
+                ctx.shadowColor = ready ? '#8AFFFF' : '#00BFD8'
+                ctx.shadowBlur = ready ? 12 + pulse * 5 : 5
+                this._roundRect(x, y, width, height, radius)
+                const track = ctx.createLinearGradient(0, y, 0, y + height)
+                track.addColorStop(0, 'rgba(8,31,43,0.96)')
+                track.addColorStop(0.5, 'rgba(2,10,18,0.98)')
+                track.addColorStop(1, 'rgba(0,33,44,0.9)')
+                ctx.fillStyle = track
+                ctx.fill()
+                ctx.shadowBlur = 0
+                ctx.strokeStyle = ready ? `rgba(174,255,255,${pulse})` : 'rgba(60,221,244,0.55)'
+                ctx.lineWidth = 1.25
+                ctx.stroke()
+
+                const inset = 2.5
+                const innerX = x + inset
+                const innerY = y + inset
+                const innerWidth = width - inset * 2
+                const innerHeight = height - inset * 2
+                const fillWidth = innerWidth * ratio
+                if (fillWidth > 0) {
+                    this._roundRect(innerX, innerY, fillWidth, innerHeight, innerHeight / 2)
+                    const charge = ctx.createLinearGradient(innerX, 0, innerX + innerWidth, 0)
+                    charge.addColorStop(0, '#007EAA')
+                    charge.addColorStop(0.48, '#00DFF4')
+                    charge.addColorStop(1, '#B9FFFF')
+                    ctx.fillStyle = charge
+                    ctx.shadowColor = '#00E5FF'
+                    ctx.shadowBlur = ready ? 12 : 6
+                    ctx.fill()
+                    ctx.shadowBlur = 0
+
+                    ctx.save()
+                    this._roundRect(innerX, innerY, fillWidth, innerHeight, innerHeight / 2)
+                    ctx.clip()
+                    const shimmerWidth = 24
+                    const cycle = (this.elapsedTime % 1.6) / 1.6
+                    const shimmerX = innerX - shimmerWidth + cycle * (innerWidth + shimmerWidth * 2)
+                    const shimmer = ctx.createLinearGradient(shimmerX, 0, shimmerX + shimmerWidth, 0)
+                    shimmer.addColorStop(0, 'rgba(255,255,255,0)')
+                    shimmer.addColorStop(0.5, 'rgba(255,255,255,0.72)')
+                    shimmer.addColorStop(1, 'rgba(255,255,255,0)')
+                    ctx.fillStyle = shimmer
+                    ctx.fillRect(shimmerX, innerY, shimmerWidth, innerHeight)
+                    ctx.fillStyle = 'rgba(255,255,255,0.28)'
+                    ctx.fillRect(innerX, innerY + 1, fillWidth, 1)
+                    ctx.restore()
+                }
+
+                ctx.restore()
+            },
+
             drawPowerUpHUD: function (x, y, icon, label, time, maxTime, color) {
                 const ctx = this.ctx
                 const w   = 138
@@ -283,7 +343,7 @@
                     const chargeRatio = Math.max(0, Math.min(1, energy / pulseCost))
                     const totalCapsules = Math.ceil(pulseCost / pickupAmount)
                     const collectedCapsules = Math.min(totalCapsules, Math.floor(energy / pickupAmount))
-                    this.hudPanel(10, puY, 148, 48,
+                    this.hudPanel(10, puY, 148, 50,
                         chargeRatio >= 1 ? 'rgba(97,245,255,0.72)' : 'rgba(97,245,255,0.24)')
                     ctx.save()
                     ctx.font = 'bold 8px Lato, sans-serif'
@@ -294,30 +354,15 @@
                     ctx.fillStyle = chargeRatio >= 1 ? '#FFFFFF' : 'rgba(255,255,255,0.65)'
                     ctx.fillText(Math.round(chargeRatio * 100) + '%', 150, puY + 13)
 
-                    this._roundRect(18, puY + 19, energyWidth, 12, 6)
-                    ctx.fillStyle = 'rgba(255,255,255,0.08)'
-                    ctx.fill()
-                    ctx.strokeStyle = 'rgba(97,245,255,0.26)'
-                    ctx.lineWidth = 1
-                    ctx.stroke()
-                    if (chargeRatio > 0) {
-                        const gradient = ctx.createLinearGradient(18, 0, 18 + energyWidth, 0)
-                        gradient.addColorStop(0, '#00BFD8')
-                        gradient.addColorStop(1, '#9AFAFF')
-                        ctx.shadowColor = '#00E1FF'
-                        ctx.shadowBlur = chargeRatio >= 1 ? 10 : 4
-                        this.hudRoundRect(20, puY + 21,
-                            (energyWidth - 4) * chargeRatio, 8, 4, gradient)
-                        ctx.shadowBlur = 0
-                    }
+                    this.drawPulseChargeBar(18, puY + 18, energyWidth, 14, chargeRatio)
                     ctx.font = 'bold 7px Lato, sans-serif'
                     ctx.textAlign = 'left'
                     ctx.fillStyle = chargeRatio >= 1 ? '#BFFFFF' : 'rgba(255,255,255,0.55)'
                     const pulseStatus = chargeRatio >= 1
                         ? '[E] ACTIVAR' : 'RECOGE CAPSULAS  ' + collectedCapsules + '/' + totalCapsules
-                    ctx.fillText(pulseStatus, 18, puY + 41)
+                    ctx.fillText(pulseStatus, 18, puY + 44)
                     ctx.restore()
-                    puY += 51
+                    puY += 53
                 }
                 if (pl.rapidFire  > 0) puY = this.drawPowerUpHUD(10, puY, '⚡', 'RAPIDFIRE', pl.rapidFire,  6,   '#FF8C00')
                 if (pl.tripleShot > 0) puY = this.drawPowerUpHUD(10, puY, '⊕', 'TRIPLE',    pl.tripleShot, 6,   '#9B30FF')
