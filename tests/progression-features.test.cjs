@@ -153,6 +153,10 @@ test('energy pickup is visible, collectible and shares the existing power-up lif
     pickup.update()
     assert.equal(drawn, true)
     assert.ok(Math.abs(pickup.rotation - app.config.energy.capsuleRotationSpeed * 0.5) < 0.000001)
+    pickup.rotation = Math.PI * 2 - 0.01
+    Game.dt = 0.1
+    pickup.update()
+    assert.ok(pickup.rotation > Math.PI * 2, 'rotation phase remains continuous across a full turn')
     assert.equal(Game.energy, 70)
     collides = true
     Game.dt = 0

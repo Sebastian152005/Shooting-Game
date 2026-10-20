@@ -16,7 +16,7 @@
                     && Math.min(first, last) - radius <= gap.center + gap.width / 2
             },
 
-            reserveFan: function (owner, x, y, speed, pairs, warning, variation) {
+            reserveFan: function (owner, x, y, speed, pairs, warning, variation, target = null) {
                 if (this.safeCorridor || this.paused || this.isGameOver) return null
                 if (Object.values(this.enemies).some(enemy => enemy.pendingAttack)) return null
                 const level = owner.profile?.level || this.difficulty
@@ -24,8 +24,12 @@
                     config.fanGapWidth - Math.min(4, Math.max(0, level - 6)) * 5)
                 const shift = level >= 10 ? config.fanShift : Math.min(75, config.fanShift)
                 const offset = level >= 6 ? (variation % 3 - 1) * shift : 0
+                const observedX = Number.isFinite(target?.x)
+                    ? target.x : this.player.x + this.player.width / 2
+                const observedVelocity = Number(target?.horizontalVelocity) || 0
+                const predictedX = observedX + observedVelocity * config.controllerAimLead
                 const center = Math.max(width / 2 + 16, Math.min(this.view.width - width / 2 - 16,
-                    this.player.x + this.player.width / 2 + offset))
+                    predictedX + offset))
                 const gap = {
                     owner, center, width, fired: false,
                     top: this.player.y - 8,

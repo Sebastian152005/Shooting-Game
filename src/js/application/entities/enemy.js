@@ -6,7 +6,9 @@
             this.x = position ? position.x : Game.random(0, Game.view.width - this.width)
             this.entryMotionSeed = position?.entryMotionSeed
             this.entrySway = position?.entrySway
+            this.entryKind = position?.entryKind || 'top'
             this.entryPathBounds = position?.entryPathBounds || null
+            this.roleHint = position?.roleHint || null
             this.entering = true
             this.y = position ? position.y : -this.height - Game.config.progression.enemySeparation
             this.dead   = false
@@ -17,14 +19,26 @@
             this.bank = 0
             this.entryVelocityX = 0
             this.entryVelocityY = 0
+            this.trafficRemaining = 0
+            this.trafficDirection = 0
+            this.trafficVerticalDirection = 0
+            this.trafficYielding = false
+            this.trafficLaneOffset = 0
+            this.trafficLaneTarget = 0
             this.salvo = 0
             this.pendingAttack = null
             this.attackTurn = 0
+            this.cadenceTrait = Game.rules.enemyCadenceTrait(
+                this.index, Game.config.progression.cadenceVariation)
+            this.movementTrait = Game.rules.enemyMovementTrait(
+                this.index, Game.config.progression.movementVariation)
             this.ai = {
                 state: Game.rules.ENEMY_AI_STATES.ENTERING,
                 acquisitionRemaining: 0,
-                lastKnownTarget: null
+                lastKnownTarget: null,
+                memoryRemaining: 0
             }
+            this.intent = Object.freeze({ mode: 'patrol', desiredX: null, movingLeft: this.movingLeft })
             this.configure(Game.waveProfile)
             if (position && Number.isFinite(position.targetX) && Number.isFinite(position.targetY)) {
                 this.entryTargetX = position.targetX
@@ -46,19 +60,28 @@
             }
             this.profile = profile
             this.pattern = profile.patterns[this.index % profile.patterns.length]
-            const preferred = Game.rules.enemyRolePreference(profile, this.index)
-            const specialists = Object.values(Game.enemies).filter(enemy => enemy !== this && !enemy.dead && enemy.role === preferred).length
-            this.role = preferred !== 'pressure' && specialists >= Game.config.progression.maxSpecialistsPerRole ? 'pressure' : preferred
+            const preferred = this.roleHint || Game.rules.enemyRolePreference(profile, this.index)
+            this.roleHint = null
+            const activeRoles = Object.values(Game.enemies)
+                .filter(enemy => enemy !== this && !enemy.dead)
+                .map(enemy => enemy.role)
+            const entryRequiresSpecialist = Game.rules.enemyEntryRequiresSpecialist(profile, this.entryKind)
+            this.role = entryRequiresSpecialist || Game.rules.canAssignEnemyRole(preferred, activeRoles, Game.maxEnemies,
+                Game.config.progression.maxSpecialistsPerRole,
+                Game.config.progression.minimumCommonEnemies) ? preferred : 'pressure'
+            this.archetype = Game.rules.enemyArchetypeSignature(this.role)
             this.isAggressor = this.role === 'aggressor'
             this.isMarksman = this.role === 'marksman'
-            this.speed = profile.enemySpeed + (this.isAggressor ? 0.4 : this.isMarksman ? 0.15 : 0)
+            this.speed = (profile.enemySpeed + (this.isAggressor ? 0.4 : this.isMarksman ? 0.15 : 0))
+                * this.movementTrait
             this.bulletSpeed = profile.bulletSpeed + (this.isAggressor ? 0.4 : this.isMarksman ? 0.25 : 0)
             // Specialists have exclusive attacks and leave time to react between charges.
-            this.shootInterval = this.role === 'controller'
+            const baseShootInterval = this.role === 'controller'
                 ? Math.max(1.2, profile.shootInterval + 1)
                 : this.isAggressor ? Math.max(1, profile.shootInterval - 0.35)
                     : this.isMarksman ? Math.max(1.2, profile.shootInterval + 0.3)
                     : profile.shootInterval
+            this.shootInterval = baseShootInterval * this.cadenceTrait
             this.minY = Game.config.progression.enemyTopMargin
             this.maxY = Game.enemyBounds(this.pattern === 'diver' || this.isAggressor || this.isMarksman, profile.level).bottom - this.height
             Game.resetEnemyMotion(this)
@@ -77,11 +100,12 @@
         Enemy.prototype.update = function () {
             if (this.dead || Game.paused || Game.isGameOver || Game.bossActive || Game.enemies[this.index] !== this) return
             if (this.entering) {
-                const nextElapsed = Math.min(Game.config.motion.entryDuration, this.entryElapsed + Game.dt)
+                const entryDuration = this.entryDuration || Game.config.motion.entryDuration
+                const nextElapsed = Math.min(entryDuration, this.entryElapsed + Game.dt)
                 const entry = Game.rules.enemyEntryMotion(
                     { x: this.entryStartX, y: this.entryStartY },
                     { x: this.entryTargetX, y: this.entryY },
-                    nextElapsed, Game.config.motion.entryDuration, this.entryMotionSeed ?? this.index,
+                    nextElapsed, entryDuration, this.entryMotionSeed ?? this.index,
                     this.entrySway ?? Game.config.motion.entrySway, Game.view.width - this.width)
                 if (Game.canMoveEnemy(this, entry.x, entry.y)) {
                     const horizontalChange = entry.x - this.x
@@ -90,12 +114,15 @@
                     this.x = entry.x
                     this.y = entry.y
                     this.entryElapsed = nextElapsed
-                    this.bank += (Math.max(-0.18, Math.min(0.18, horizontalChange * 0.018)) - this.bank)
+                    const bankScale = this.archetype?.bankScale || 1
+                    this.bank += (Math.max(-0.2, Math.min(0.2,
+                        horizontalChange * 0.018 * bankScale)) - this.bank)
                         * Math.min(1, Game.dt * Game.config.motion.bankResponse)
                 }
                 if (entry.done && Math.abs(this.x - this.entryTargetX) <= 0.01
                     && Math.abs(this.y - this.entryY) <= 0.01) {
                     this.entering = false
+                    this.entryKind = null
                     this.entryPathBounds = null
                     this.setAIState(Game.rules.ENEMY_AI_STATES.PATROL)
                 }
@@ -110,19 +137,27 @@
             }
             const charging = Boolean(this.pendingAttack)
             if (!charging) {
+                const perceivedTarget = this.updatePerception(Game.dt)
+                const intensity = Game.currentCombatIntensity()
+                const fireInterval = this.role === 'pressure'
+                    ? this.shootInterval * intensity.commonFireMultiplier
+                    : this.shootInterval
+                this.updateTacticalIntent(intensity, fireInterval)
                 const previousX = this.x
                 Game.moveEnemy(this, Game.dt)
                 const horizontalChange = this.x - previousX
-                const desiredBank = Math.max(-0.14, Math.min(0.14, horizontalChange * 0.025))
+                const bankScale = this.archetype?.bankScale || 1
+                const desiredBank = Math.max(-0.16, Math.min(0.16,
+                    horizontalChange * 0.025 * bankScale))
                 this.bank += (desiredBank - this.bank) * Math.min(1, Game.dt * Game.config.motion.bankResponse)
 
-                this.shootTimer = Math.min(this.shootInterval, this.shootTimer + Game.dt)
+                this.shootTimer = Math.min(fireInterval, this.shootTimer + Game.dt)
                 if (this.role === 'pressure') {
                     if (this.ai.state === Game.rules.ENEMY_AI_STATES.RECOVERY
-                        && this.shootTimer >= this.shootInterval) this.setAIState(Game.rules.ENEMY_AI_STATES.PATROL)
-                    if (this.shootTimer >= this.shootInterval && this.shoot()) this.shootTimer = 0
+                        && this.shootTimer >= fireInterval) this.setAIState(Game.rules.ENEMY_AI_STATES.PATROL)
+                    if (this.shootTimer >= fireInterval && this.shoot()) this.shootTimer = 0
                 } else {
-                    this.updateAI(Game.dt)
+                    this.updateAI(Game.dt, perceivedTarget)
                 }
             }
 
@@ -206,18 +241,20 @@
             const x = this.x + this.width / 2
             const y = this.y + this.height
             const salvo = this.salvo + 1
+            if (!knownTarget && !this.ai.lastKnownTarget && this.canAcquireTarget()) this.observeTarget()
+            const rememberedTarget = knownTarget || this.ai.lastKnownTarget
             if (this.role === 'aggressor') {
-                // Before homing unlocks, the fast tomato laser is still honest:
-                // it only fires from a lane that its straight path can threaten.
-                const radarRange = this.profile.tracking
-                    ? this.profile.specialistDetectionRange : this.profile.detectionRange
-                if (!this.canAcquireTarget(radarRange)) return false
-                if (!Game.canPrepareEnemyAttack(this)) return false
-                const targetX = knownTarget?.x ?? Game.player.x + Game.player.width / 2
-                const targetY = knownTarget?.y ?? Game.player.y + Game.player.height / 2
+                if (!rememberedTarget) return false
+                // Before homing unlocks, memory predicts when the player will
+                // cross the straight tomato laser instead of requiring a lane.
+                if (!this.profile.tracking && !this.canFireStraightShot(rememberedTarget)) return false
+                const kind = this.profile.tracking ? 'tracking' : 'aggressive'
+                if (!Game.canPrepareEnemyAttack(this, kind)) return false
+                const targetX = rememberedTarget.x
+                const targetY = rememberedTarget.y
                 this.pendingAttack = {
                     x, y, targetX, targetY, angle: 0,
-                    kind: this.profile.tracking ? 'tracking' : 'aggressive',
+                    kind,
                     remaining: Game.config.progression.enemyWarning
                 }
                 this.salvo = salvo
@@ -227,10 +264,10 @@
             if (this.role === 'controller') {
                 // Controllers scan the whole visible combat area, but still require
                 // the player to be below them before reserving a fan corridor.
-                if (!this.canAcquireTarget(Game.view.width)) return false
-                if (!Game.canPrepareEnemyAttack(this)) return false
+                if (!rememberedTarget) return false
+                if (!Game.canPrepareEnemyAttack(this, 'fan')) return false
                 const fan = Game.reserveFan(this, x, y, this.bulletSpeed, 2,
-                    Game.config.progression.fanWarning, salvo)
+                    Game.config.progression.fanWarning, salvo, rememberedTarget)
                 if (!fan) return false
                 this.pendingAttack = { x, y, angles: fan.angles, kind: 'fan', remaining: Game.config.progression.fanWarning }
                 this.salvo = salvo
@@ -238,13 +275,13 @@
                 return true
             }
             if (this.role === 'marksman') {
-                if (!this.canAcquireTarget(this.profile.specialistDetectionRange)) return false
-                if (!Game.canPrepareEnemyAttack(this)) return false
-                const playerCenter = knownTarget?.x ?? Game.player.x + Game.player.width / 2
-                const targetY = knownTarget?.y ?? Game.player.y + Game.player.height / 2
+                if (!rememberedTarget) return false
+                if (!Game.canPrepareEnemyAttack(this, 'aimed')) return false
+                const playerCenter = rememberedTarget.x
+                const targetY = rememberedTarget.y
                 const prediction = Game.rules.predictHorizontalIntercept({
                     targetX: playerCenter,
-                    targetVelocity: knownTarget?.horizontalVelocity ?? Game.player.horizontalVelocity,
+                    targetVelocity: rememberedTarget.horizontalVelocity,
                     verticalDistance: targetY - y,
                     projectileSpeed: this.bulletSpeed,
                     minimumLead: Game.config.progression.precisionMinimumLead,
@@ -263,8 +300,10 @@
                 this.setAIState(Game.rules.ENEMY_AI_STATES.WARNING)
                 return true
             }
-            // The green UFO supplies the readable baseline pressure: one straight
-            // laser per cadence. Specialists keep radar-gated, warned attacks.
+            // The green UFO keeps a straight, readable laser. Its short memory
+            // estimates a crossing from observed movement rather than testing a
+            // fixed lane, so patrol and firing remain independent.
+            if (!this.canFireStraightShot(rememberedTarget)) return false
             const bullets = Game.fireEnemyVolley(x, y, this.bulletSpeed,
                 Game.config.enemyAttackColors.common, [0], null, 'common')
             if (!bullets.length) return false
@@ -276,7 +315,6 @@
         Enemy.prototype.setAIState = function (state, acquisitionRemaining = 0) {
             this.ai.state = state
             this.ai.acquisitionRemaining = acquisitionRemaining
-            if (state === Game.rules.ENEMY_AI_STATES.PATROL) this.ai.lastKnownTarget = null
         }
 
         Enemy.prototype.observeTarget = function () {
@@ -285,37 +323,87 @@
                 y: Game.player.y + Game.player.height / 2,
                 horizontalVelocity: Game.player.horizontalVelocity
             })
+            this.ai.memoryRemaining = Game.config.progression.targetMemoryDuration
         }
 
-        Enemy.prototype.updateAI = function (dt) {
-            const detected = this.canAcquireTarget()
-            if (detected) this.observeTarget()
+        Enemy.prototype.updateTacticalIntent = function (intensity, fireInterval) {
+            const originX = this.x + this.width / 2
+            const target = this.ai.lastKnownTarget
+            this.intent = Game.rules.decideEnemyIntent({
+                role: this.role,
+                aiState: this.ai.state,
+                directive: Game.rules.combatDirective(intensity),
+                originX,
+                targetX: target?.x,
+                targetVelocity: target?.horizontalVelocity,
+                tracking: this.profile.tracking,
+                readiness: this.shootTimer / Math.max(0.001, fireInterval),
+                readinessThreshold: Game.config.progression.commonSteeringReadiness,
+                positioningReadiness: Game.config.progression.specialistPositioningReadiness,
+                movingLeft: this.movingLeft,
+                index: this.index,
+                viewportWidth: Game.view.width,
+                enemyWidth: this.width,
+                deadzone: Game.config.progression.tacticalDeadzone,
+                flankOffset: Game.config.progression.aggressorFlankOffset,
+                marksmanOffset: Game.config.progression.marksmanPositionOffset,
+                controllerOffset: Game.config.progression.controllerPositionOffset,
+                controllerLead: Game.config.progression.controllerAimLead,
+                pressMovementMultiplier: Game.config.progression.commonLaneSeekMultiplier
+            })
+        }
+
+        Enemy.prototype.updatePerception = function (dt) {
+            this.ai.memoryRemaining = Math.max(0, this.ai.memoryRemaining - dt)
+            if (this.ai.memoryRemaining === 0) this.ai.lastKnownTarget = null
+            const liveDetection = this.canAcquireTarget()
+            if (liveDetection) this.observeTarget()
+            return liveDetection || Boolean(this.ai.lastKnownTarget && this.ai.memoryRemaining > 0)
+        }
+
+        Enemy.prototype.updateAI = function (dt, perceivedTarget) {
             const next = Game.rules.advanceEnemyAI(this.ai, {
                 entering: this.entering,
                 ready: this.shootTimer >= this.shootInterval,
-                detected,
+                detected: perceivedTarget,
                 dt,
                 acquisitionDuration: Game.config.progression.enemyAcquisitionTime
             })
             this.ai.state = next.state
             this.ai.acquisitionRemaining = next.acquisitionRemaining
-            if (next.action === 'cancel') this.ai.lastKnownTarget = null
             if (next.action === 'fire' && this.shoot(this.ai.lastKnownTarget)) this.shootTimer = 0
         }
 
-        Enemy.prototype.canAcquireTarget = function (range) {
+        Enemy.prototype.canAcquireTarget = function (minimumConfidence) {
             if (this.dead || this.entering || Game.bossActive || Game.paused || Game.isGameOver
                 || Game.enemies[this.index] !== this) return false
-            if (this.role === 'pressure') return Game.player.y + Game.player.height / 2 > this.y + this.height
-            const radarRange = range ?? (this.role === 'controller'
-                ? Game.view.width
-                : this.role === 'marksman'
-                    ? this.profile.specialistDetectionRange
-                    : this.profile.tracking
-                        ? this.profile.specialistDetectionRange
-                        : this.profile.detectionRange)
-            return Game.rules.targetInFiringLane(
-                { x: this.x + this.width / 2, y: this.y + this.height }, Game.player, radarRange)
+            const awareness = Game.rules.targetAwareness(
+                { x: this.x + this.width / 2, y: this.y + this.height },
+                Game.player, Game.view.width, Game.view.height)
+            const threshold = minimumConfidence ?? (this.role === 'pressure'
+                ? Game.config.progression.commonSensorConfidence
+                : Game.config.progression.specialistSensorConfidence)
+            return awareness.detected && awareness.confidence >= threshold
+        }
+
+        Enemy.prototype.canFireStraightShot = function (target) {
+            if (!target || this.dead || this.entering) return false
+            const originY = this.y + this.height
+            const targetY = Number(target.y) || Game.player.y + Game.player.height / 2
+            return Game.rules.straightShotOpportunity({
+                originX: this.x + this.width / 2,
+                targetX: target.x,
+                targetVelocity: target.horizontalVelocity,
+                stability: target.stability,
+                observations: target.observations,
+                verticalDistance: targetY - originY,
+                projectileSpeed: this.bulletSpeed,
+                targetWidth: Game.player.width,
+                viewportWidth: Game.view.width,
+                toleranceRatio: Game.config.progression.straightShotToleranceRatio,
+                engagementRatio: Game.config.progression.straightShotEngagementRatio,
+                maximumLead: Game.config.progression.straightShotMaximumLead
+            }).canFire
         }
         return Enemy
     }

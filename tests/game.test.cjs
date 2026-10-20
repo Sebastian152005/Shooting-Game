@@ -120,6 +120,9 @@ test('player stays inside the canvas at high movement speeds', () => {
     Game.player.x = Game.c.width - Game.player.width - 1
     Game.player.update()
     assert.equal(Game.player.x, Game.view.width - Game.player.width)
+    Game.player.update()
+    assert.equal(Game.player.horizontalVelocity, 0,
+        'holding against the edge does not fake velocity for predictive aim')
 })
 
 test('enemy hits award points and reserve a replacement', () => {
@@ -223,6 +226,11 @@ test('resizing adjusts the playable area without restarting or duplicating the l
     const { Game, resize, frames } = setup()
     Game.score = 75
     const sprite = Game.player.sprite
+    const meteor = new Game.entities.Meteor({
+        x: Game.view.width - 50, y: 180, size: 50, speed: 2, drift: 0.2,
+        gravity: 0.2, terminalSpeed: 4, angularVelocity: 1, hp: 1, points: 35
+    })
+    const energy = new Game.entities.EnergyPickup(Game.view.width - 13, 220)
     resize(2560, 1080, 1)
     assert.ok(Math.abs(Game.view.width - 1280) < 0.000001)
     assert.equal(Game.c.width, 2560)
@@ -235,6 +243,9 @@ test('resizing adjusts the playable area without restarting or duplicating the l
     assert.ok(Math.abs(Game.view.width - 360) < 0.000001)
     assert.ok(Game.player.x >= 0 && Game.player.x + Game.player.width <= Game.view.width)
     assert.equal(Game.player.y, Game.view.height - Game.player.height)
+    assert.ok(meteor.x >= 0 && meteor.x + meteor.width <= Game.view.width)
+    assert.ok(energy.x - energy.width / 2 >= 0
+        && energy.x + energy.width / 2 <= Game.view.width)
 })
 
 test('resizing paused and finished scenes preserves state and draws the overlay again', () => {
@@ -588,24 +599,17 @@ test('advanced formations combine controller fans with aggressor-only homing', (
     assert.equal(homing.vx, vx, 'steering ends after its limited tracking window')
 })
 
-test('boss phases change volleys and always warn before firing', () => {
+test('boss fires baseline pressure immediately and never cancels an announced aimed volley', () => {
     const { Game, Boss } = setup()
     const boss = Game.spawnBossForTest()
+    assert.ok(boss.shootTimer > 0, 'the boss enters with its first offensive cycle already charging')
     boss.entering = false
     boss.y = 15
     boss.prepareAttack()
-    assert.equal(boss.warningAngles.length, 5)
-    assert.equal(Object.keys(Game.enemyBullets).length, 0)
-    Game.dt = 0.3
-    const x = boss.x
-    boss.update()
-    boss.update()
-    assert.equal(boss.x, x, 'the warning origin stays stationary')
-    assert.equal(Object.keys(Game.enemyBullets).length, 0)
-    boss.update()
     assert.equal(Object.keys(Game.enemyBullets).length, 5)
+    assert.ok(Object.values(Game.enemyBullets).every(bullet => bullet.attackType === 'boss-classic'))
+    assert.equal(boss.warningTime, 0, 'the readable classic spread needs no warning')
     Game.enemyBullets = {}
-    Game.updateProgression(0.45)
     boss.hp = boss.maxHp * 0.6
     boss.updatePhase()
     assert.equal(boss.phase, 2)
@@ -615,10 +619,18 @@ test('boss phases change volleys and always warn before firing', () => {
     Game.player.x = Game.view.width - Game.player.width
     boss.update()
     assert.deepEqual(Array.from(boss.warningAngles), aim, 'aim locks before the warning')
+    const remaining = boss.warningTime
     boss.hp = boss.maxHp * 0.2
     boss.updatePhase()
     assert.equal(boss.phase, 3)
-    assert.equal(boss.warningTime, 0, 'changing phase cancels the previous volley')
+    assert.equal(boss.warningTime, remaining, 'damage cannot cancel an announced volley')
+    assert.deepEqual(Array.from(boss.warningAngles), aim)
+    Game.dt = remaining
+    boss.update()
+    assert.equal(Object.keys(Game.enemyBullets).length, 3)
+    assert.ok(Object.values(Game.enemyBullets).every(bullet => bullet.attackType === 'boss-aimed'))
+    Game.enemyBullets = {}
+    boss.attackStep = 2
     boss.prepareAttack()
     assert.equal(boss.warningPattern, 'crossfire')
     assert.equal(boss.warningAngles.length, 7)
@@ -626,6 +638,29 @@ test('boss phases change volleys and always warn before firing', () => {
     Game.dt = Game.config.progression.bossWarning
     boss.update()
     assert.equal(Object.keys(Game.enemyBullets).length, 7)
+    assert.ok(Object.values(Game.enemyBullets).every(bullet => bullet.attackType === 'boss-crossfire'))
+})
+
+test('boss navigation uses smooth phase targets without edge jitter', () => {
+    const { Game } = setup()
+    const boss = Game.spawnBossForTest()
+    boss.entering = false
+    boss.y = Game.config.progression.bossTopMargin
+    boss.shootInterval = 100000
+    Game.dt = 0.02
+    const positions = []
+    let directionChanges = 0
+    let previousDirection = Math.sign(boss.horizontalVelocity)
+    for (let frame = 0; frame < 600; frame++) {
+        boss.update()
+        positions.push(boss.x)
+        const direction = Math.sign(boss.horizontalVelocity)
+        if (direction && previousDirection && direction !== previousDirection) directionChanges++
+        if (direction) previousDirection = direction
+        assert.ok(boss.x >= 0 && boss.x + boss.width <= Game.view.width)
+    }
+    assert.ok(Math.max(...positions) - Math.min(...positions) > Game.view.width * 0.35)
+    assert.ok(directionChanges < 12, 'the boss commits to destinations instead of vibrating at an edge')
 })
 
 test('all movement patterns stay above the player and inside a narrow screen', () => {
@@ -646,6 +681,7 @@ test('all movement patterns stay above the player and inside a narrow screen', (
 test('successive bosses keep their minimum gap and restart clears recovery slots', () => {
     const { Game } = setup()
     const levels = []
+    const health = []
     for (let i = 0; i < 11; i++) {
         Game.increaseDifficulty()
         if (Game.waveStage === 'boss-pending') {
@@ -654,12 +690,14 @@ test('successive bosses keep their minimum gap and restart clears recovery slots
         }
         if (Game.boss) {
             levels.push(Game.difficulty)
+            health.push(Game.boss.maxHp)
             Game.boss.die()
             Game.updateProgression(2)
             Game.updateSpawns(10)
         }
     }
     assert.deepEqual(levels, [5, 9, 12])
+    assert.deepEqual(health, [28, 42, 54], 'boss health grows with levels and completed encounters')
     Game.difficulty = Game.nextBossAt - 1
     Game.increaseDifficulty()
     for (const enemy of Object.values(Game.enemies)) enemy.die()
@@ -849,14 +887,15 @@ test('destroying an enemy on the final charge frame cancels its shot', () => {
     assert.equal(enemy.dead, true)
     assert.equal(enemy.pendingAttack, null)
     assert.equal(Object.keys(Game.enemyBullets).length, 0)
-    assert.equal(Game.enemyAttackCooldown, 0.45)
+    assert.equal(Game.enemyAttackCooldown, Game.config.progression.enemyAttackGap)
     assert.ok(Game.score > 0)
 })
 
-test('only one dangerous shot charges at once, followed by a shared recovery gap', () => {
+test('two distinct dangerous shots can charge while nearby duplicate attacks coordinate', () => {
     const { Game, Enemy } = setup()
     Game.difficulty = 8
     Game.configureEnemiesForTest()
+    Game.progressionTime = 8
     for (const actor of Object.values(Game.enemies)) actor.shootTimer = 0
     const second = new Enemy()
     second.entering = false
@@ -864,13 +903,22 @@ test('only one dangerous shot charges at once, followed by a shared recovery gap
     second.x = Game.player.x
     const first = Game.enemies[3]
     assert.equal(first.shoot(), true)
-    assert.equal(second.shoot(), false)
-    assert.equal(second.pendingAttack, null)
+    assert.equal(second.shoot(), false, 'nearby aggressors do not duplicate the same attack')
+    second.x = Math.min(Game.view.width - second.width,
+        first.x + Game.config.progression.specialistAttackSeparation + 10)
+    Game.player.x = second.x
+    assert.equal(second.shoot(), true, 'the same role can attack from a meaningfully different sector')
+    assert.equal(Object.values(Game.enemies).filter(enemy => enemy.pendingAttack).length, 2)
+    const third = Game.enemies[5]
+    third.x = Game.player.x
+    assert.equal(third.shoot(), false, 'the specialist budget still has a hard cap')
     Game.dt = 0.7
     first.update()
-    assert.equal(second.shoot(), false, 'next attacker waits after the shot')
-    Game.updateProgression(0.45)
-    assert.equal(second.shoot(), true)
+    assert.equal(third.shoot(), false, 'next attacker waits after a shot')
+    Game.updateProgression(Game.config.progression.enemyAttackGap)
+    second.update()
+    Game.updateProgression(Game.config.progression.enemyAttackGap)
+    assert.equal(third.shoot(), true)
     assert.equal(Object.values(Game.enemies).filter(enemy => enemy.pendingAttack).length, 1)
 })
 
@@ -894,6 +942,9 @@ test('pause and resize preserve an attack target without tracking the player', (
     Game.continued()
     enemy.update()
     assert.equal(Object.keys(Game.enemyBullets).length, 1)
+    const tracking = Object.values(Game.enemyBullets)[0]
+    assert.equal(tracking.vx, 0, 'resizing does not turn a vertical tracking launch into an aimed shot')
+    assert.equal(tracking.homing, true)
 })
 
 test('pending boss preserves live charges and later boss entry and restart prevent ghost shots', () => {
@@ -1107,7 +1158,7 @@ test('enemy roles unlock gradually and specialists never fall back to pressure s
     controller.die()
     assert.equal(Game.safeCorridor, null)
     assert.equal(aggressor.shoot(), false, 'cancellation keeps the recovery gap')
-    Game.updateProgression(0.45)
+    Game.updateProgression(Game.config.progression.enemyAttackGap)
     assert.equal(aggressor.shoot(), true)
     assert.equal(aggressor.pendingAttack.kind, 'tracking')
     pressure.x = Game.player.x + Game.player.width / 2 - pressure.width / 2
@@ -1120,6 +1171,125 @@ test('enemy roles unlock gradually and specialists never fall back to pressure s
     assert.equal(commonShot.attackType, 'common')
 })
 
+test('level-two lateral arrivals are real specialists rather than green common UFOs', () => {
+    const { Game, Enemy } = setup()
+    Game.difficulty = 2
+    Game.applyWaveProfile()
+    Game.enemies = {}
+    Game.enemyIndex = 0
+    const position = roleHint => ({
+        x: -Game.config.enemySize.width,
+        y: Game.config.progression.enemyTopMargin,
+        targetX: 0,
+        targetY: Game.config.progression.enemyTopMargin,
+        entryKind: 'side',
+        roleHint
+    })
+    const first = new Enemy(position('aggressor'))
+    const second = new Enemy(position('aggressor'))
+    const third = new Enemy(position('aggressor'))
+    const topCommon = new Enemy({ ...position('pressure'), entryKind: 'top' })
+    assert.equal(first.role, 'aggressor')
+    assert.equal(second.role, 'aggressor')
+    assert.equal(third.role, 'aggressor', 'a lateral route never degrades into a common attacker')
+    assert.equal(third.sprite, 'enemy')
+    assert.equal(topCommon.sprite, 'scout')
+})
+
+test('level-two spawning gives aggressors only lateral entries and commons only top entries', () => {
+    const spawnAtLevelTwo = enemyIndex => {
+        const { Game } = setup({ readyEnemies: false })
+        Game.waveStage = 'wave'
+        Game.introRemaining = 0
+        Game.pendingSpawns = [0]
+        Game.spawnCooldown = 0
+        Game.difficulty = 2
+        Game.applyWaveProfile()
+        Game.enemyIndex = enemyIndex
+        Game.updateSpawns(0)
+        return { Game, enemy: Object.values(Game.enemies)[0] }
+    }
+
+    const aggressiveSpawn = spawnAtLevelTwo(1)
+    assert.equal(aggressiveSpawn.enemy.role, 'aggressor')
+    assert.equal(aggressiveSpawn.enemy.entryKind, 'side')
+    assert.ok(aggressiveSpawn.enemy.x + aggressiveSpawn.enemy.width < 0
+        || aggressiveSpawn.enemy.x > aggressiveSpawn.Game.view.width)
+    assert.ok(aggressiveSpawn.enemy.entryTargetX > 0
+        && aggressiveSpawn.enemy.entryTargetX < aggressiveSpawn.Game.view.width - aggressiveSpawn.enemy.width,
+    'the lateral arrival sweeps visibly into the field instead of stopping at its edge')
+
+    const smoothAggressiveSpawn = spawnAtLevelTwo(4)
+    assert.equal(smoothAggressiveSpawn.enemy.role, 'aggressor')
+    assert.equal(smoothAggressiveSpawn.enemy.entryKind, 'side')
+    assert.ok(aggressiveSpawn.enemy.entryDuration < smoothAggressiveSpawn.enemy.entryDuration)
+
+    const commonSpawn = spawnAtLevelTwo(0)
+    assert.equal(commonSpawn.enemy.role, 'pressure')
+    assert.equal(commonSpawn.enemy.entryKind, 'top')
+    assert.equal(commonSpawn.enemy.entryDuration, commonSpawn.Game.config.motion.entryDuration)
+    assert.ok(commonSpawn.enemy.y + commonSpawn.enemy.height < 0)
+})
+
+test('successive lateral specialists alternate left and right entrances', () => {
+    const { Game } = setup({ readyEnemies: false })
+    Game.waveStage = 'wave'
+    Game.introRemaining = 0
+    Game.difficulty = 2
+    Game.applyWaveProfile()
+    const spawnAggressor = enemyIndex => {
+        Game.pendingSpawns = [0]
+        Game.spawnCooldown = 0
+        Game.enemyIndex = enemyIndex
+        Game.updateSpawns(0)
+        return Object.values(Game.enemies)[0]
+    }
+    const fromLeft = spawnAggressor(1)
+    assert.ok(fromLeft.x + fromLeft.width < 0)
+    delete Game.enemies[fromLeft.index]
+    Game.refreshEnemyCount()
+    const fromRight = spawnAggressor(4)
+    assert.ok(fromRight.x > Game.view.width)
+    assert.equal(Game.nextLateralEntrySide, 'left')
+})
+
+test('lateral arrivals travel naturally from outside the viewport before becoming active', () => {
+    const { Game, Enemy, app } = setup({ readyEnemies: false })
+    Game.waveStage = 'wave'
+    Game.pendingSpawns = []
+    Game.difficulty = 2
+    Game.applyWaveProfile()
+    const startX = -Game.config.enemySize.width - app.config.progression.enemySeparation
+    const enemy = new Enemy({
+        x: startX,
+        y: 120,
+        targetX: 80,
+        targetY: 120,
+        entryMotionSeed: 0,
+        entrySway: Game.config.motion.entrySway,
+        entryKind: 'side',
+        roleHint: 'aggressor'
+    })
+    Game.dt = 0.05
+    enemy.update()
+    assert.ok(enemy.x > startX && enemy.x + enemy.width < 0,
+        'the first frame advances while the complete hull is still outside')
+    for (let frame = 0; frame < 30 && enemy.entering; frame++) enemy.update()
+    assert.equal(enemy.entering, false)
+    assert.ok(Math.abs(enemy.x - 80) < 0.001)
+    assert.ok(Math.abs(enemy.y - 120) < 0.001)
+    enemy.x = Game.player.x + Game.player.width / 2 - enemy.width / 2
+    Game.enemyAttackCooldown = 0
+    assert.equal(enemy.shoot(), true)
+    assert.equal(enemy.pendingAttack.kind, 'aggressive')
+    Game.dt = Game.config.progression.enemyWarning
+    enemy.update()
+    const bullet = Object.values(Game.enemyBullets)[0]
+    assert.equal(bullet.attackType, 'aggressor')
+    assert.equal(bullet.color, Game.config.enemyAttackColors.aggressor)
+    assert.notEqual(bullet.color, Game.config.enemyAttackColors.common)
+})
+
 test('common UFOs stay green and straight while aggressors recover tomato and later tracking', () => {
     const { Game } = setup()
     const enemy = Game.enemies[0]
@@ -1127,9 +1297,12 @@ test('common UFOs stay green and straight while aggressors recover tomato and la
     Game.player.x = Game.view.width / 2
     Game.player.movingRight = true
     Game.player.update()
-    assert.equal(enemy.shoot(), true, 'common UFOs maintain steady baseline fire outside a narrow lane')
-    assert.equal(Object.keys(Game.enemyBullets).length, 1)
-    Game.enemyBullets = {}
+    assert.equal(enemy.shoot(), false, 'common UFOs wait until memory predicts a useful crossing')
+    assert.equal(Object.keys(Game.enemyBullets).length, 0)
+    Game.player.movingRight = false
+    Game.player.horizontalVelocity = 0
+    enemy.ai.lastKnownTarget = null
+    enemy.observeTarget()
     enemy.x = Game.player.x + Game.player.width / 2 - enemy.width / 2
     assert.equal(enemy.shoot(), true)
     const common = Object.values(Game.enemyBullets)[0]
@@ -1145,8 +1318,9 @@ test('common UFOs stay green and straight while aggressors recover tomato and la
     let aggressor = Object.values(Game.enemies).find(actor => actor.role === 'aggressor')
     aggressor.x = 0
     Game.enemyAttackCooldown = 0
-    assert.equal(aggressor.shoot(), false, 'level-two aggressors do not fire straight shots outside their lane')
+    assert.equal(aggressor.shoot(), false, 'level-two aggressors reject a straight shot that cannot intercept')
     aggressor.x = Game.player.x
+    aggressor.observeTarget()
     Game.enemyAttackCooldown = 0
     assert.equal(aggressor.shoot(), true)
     assert.equal(aggressor.pendingAttack.kind, 'aggressive')
@@ -1183,7 +1357,7 @@ test('specialist quotas survive successive replacements and level reconfiguratio
     Game.difficulty = 12
     Game.configureEnemiesForTest()
     Game.fillEnemySlots(0)
-    Game.advanceSpawnsForTest(8)
+    Game.advanceSpawnsForTest(12)
     const check = () => {
         const enemies = Object.values(Game.enemies)
         for (const role of ['aggressor', 'marksman', 'controller']) {
@@ -1244,7 +1418,7 @@ test('a ready specialist outside radar cannot block one that has acquired the pl
     assert.equal(marksman.pendingAttack.kind, 'aimed')
 })
 
-test('specialist AI acquires, cancels on radar loss and can acquire again', () => {
+test('specialist AI uses brief target memory, forgets safely and can acquire again', () => {
     const { Game } = setup()
     Game.difficulty = 4
     Game.configureEnemiesForTest()
@@ -1261,12 +1435,25 @@ test('specialist AI acquires, cancels on radar loss and can acquire again', () =
     assert.equal(aggressor.pendingAttack, null)
     assert.ok(aggressor.ai.lastKnownTarget)
 
+    Game.player.x = Game.view.width * 0.6
+    aggressor.update()
+    assert.equal(aggressor.ai.state, Game.rules.ENEMY_AI_STATES.ACQUIRING,
+        'sensor hysteresis prevents target flicker at the radar edge')
+
     Game.player.x = Game.view.width - Game.player.width
     aggressor.update()
+    assert.equal(aggressor.ai.state, Game.rules.ENEMY_AI_STATES.ACQUIRING,
+        'brief memory prevents an artificial sensor-edge cancellation')
+    assert.ok(aggressor.ai.lastKnownTarget, 'lost targets remain briefly in tactical memory')
+    assert.ok(aggressor.ai.memoryRemaining > 0)
+
+    Game.dt = Game.config.progression.targetMemoryDuration
+    aggressor.update()
+    assert.equal(aggressor.ai.lastKnownTarget, null, 'memory expires without granting permanent knowledge')
     assert.equal(aggressor.ai.state, Game.rules.ENEMY_AI_STATES.PATROL)
-    assert.equal(aggressor.ai.lastKnownTarget, null)
 
     Game.player.x = 0
+    Game.dt = 0.1
     aggressor.update()
     for (let frame = 0; frame < 3; frame++) aggressor.update()
     assert.equal(aggressor.ai.state, Game.rules.ENEMY_AI_STATES.WARNING)
@@ -1318,13 +1505,13 @@ test('first-level formations stay wholly in the upper 30 percent, including narr
     }
 })
 
-test('cold starts and restarts give three enemy-free seconds without advancing difficulty', () => {
+test('cold starts and restarts use a brief enemy-free intro without advancing difficulty', () => {
     const { Game, app, frames } = setup({ readyEnemies: false })
     const delay = app.config.progression.introDuration
     assert.equal(Object.keys(Game.enemies).length, 0)
     assert.equal(Game.pendingSpawns.length, 6)
     assert.equal(Game.levelUpTimer, 0)
-    for (let i = 0; i < 59; i++) Game.updateWorld(0.05)
+    for (let elapsed = 0; elapsed < delay - 0.05; elapsed += 0.05) Game.updateWorld(0.05)
     assert.equal(Object.keys(Game.enemies).length, 0)
     assert.equal(Game.progressionTime, 0)
     const remaining = Game.introRemaining
@@ -1415,7 +1602,8 @@ test('simulation keeps formations separated through combat, bosses, respawns and
                 visible = Math.max(visible, enemies.filter(enemy => !enemy.entering).length)
                 assert.ok(enemies.length + Game.pendingSpawns.length <= Game.maxEnemies)
                 assert.ok(Object.keys(Game.enemyBullets).length <= app.config.progression.maxEnemyBullets)
-                assert.ok(enemies.filter(enemy => enemy.pendingAttack).length <= 1)
+                assert.ok(enemies.filter(enemy => enemy.pendingAttack).length
+                    <= (Game.waveProfile?.maxChargedAttacks ?? 1))
                 for (let i = 0; i < enemies.length; i++) {
                     const enemy = enemies[i]
                     assert.ok(Number.isFinite(enemy.x) && Number.isFinite(enemy.y))
@@ -1459,6 +1647,23 @@ test('drawing and repainting never advance effects or gameplay state', () => {
     Game.unPause()
     Game.updateWorld(0.05)
     assert.notEqual(snapshot(), before)
+})
+
+test('pulse HUD counts collected capsules instead of exposing raw energy', () => {
+    const { Game, drawnTexts } = setup()
+
+    for (const [energy, expectedStatus] of [
+        [0, 'RECOGE CAPSULAS  0/5'],
+        [20, 'RECOGE CAPSULAS  1/5'],
+        [80, 'RECOGE CAPSULAS  4/5'],
+        [100, '[E] ACTIVAR']
+    ]) {
+        drawnTexts.length = 0
+        Game.energy = energy
+        Game.updateScore()
+        assert.ok(drawnTexts.includes(expectedStatus), `HUD status for ${energy} energy`)
+        assert.ok(!drawnTexts.includes(`RECOGE CAPSULAS  ${energy}/100`))
+    }
 })
 
 test('opposite movement keys cancel at both edges and projectiles match their hitbox centers', () => {
@@ -1652,6 +1857,150 @@ test('a wave can leave a vertically blocked lane and resume its curve instead of
     assert.ok(Math.max(...heights) - Math.min(...heights) > 50)
 })
 
+test('head-on patrols yield deterministically and keep moving instead of freezing together', () => {
+    const { Game, Enemy, app } = setup({ readyEnemies: false })
+    Game.waveStage = 'wave'
+    Game.pendingSpawns = []
+    const left = new Enemy({ x: 100, y: 78 })
+    const right = new Enemy({ x: 212, y: 78 })
+    for (const enemy of [left, right]) {
+        enemy.entering = false
+        enemy.pattern = 'patrol'
+        enemy.shootInterval = 100000
+        Game.resetEnemyMotion(enemy)
+    }
+    left.movingLeft = false
+    right.movingLeft = true
+    Game.dt = 0.02
+    const directionChanges = new Map([[left, 0], [right, 0]])
+    const previousDirections = new Map([[left, left.movingLeft], [right, right.movingLeft]])
+    for (let step = 0; step < 120; step++) {
+        left.update()
+        right.update()
+        for (const enemy of [left, right]) {
+            if (enemy.movingLeft !== previousDirections.get(enemy)) {
+                directionChanges.set(enemy, directionChanges.get(enemy) + 1)
+                previousDirections.set(enemy, enemy.movingLeft)
+            }
+        }
+    }
+    assert.ok(left.x > 100 && right.x > 212, 'the yielding ship clears the shared route')
+    assert.ok(directionChanges.get(left) <= 1 && directionChanges.get(right) <= 2,
+        'committed traffic decisions prevent visible left-right trembling')
+    assert.ok(left.motionTime > 2 && right.motionTime > 2)
+    assert.equal(app.domain.formation.overlaps(left, right,
+        app.config.progression.enemySeparation - 0.001), false)
+})
+
+test('early-level specialists cross a tactical lane instead of parking on it', () => {
+    const { Game, Enemy } = setup({ readyEnemies: false })
+    Game.waveStage = 'wave'
+    Game.pendingSpawns = []
+    Game.difficulty = 2
+    Game.configureEnemiesForTest()
+    Game.enemyIndex = 0
+    const playerCenter = Game.player.x + Game.player.width / 2
+    const enemy = new Enemy({
+        x: playerCenter - Game.config.enemySize.width / 2,
+        y: Game.config.progression.enemyTopMargin,
+        entryKind: 'side',
+        roleHint: 'aggressor'
+    })
+    enemy.entering = false
+    enemy.movingLeft = false
+    enemy.ai.lastKnownTarget = {
+        x: playerCenter,
+        y: Game.player.y + Game.player.height / 2,
+        horizontalVelocity: 0
+    }
+    enemy.shootTimer = enemy.shootInterval * 0.7
+    Game.resetEnemyMotion(enemy)
+    Game.dt = 0.02
+    const initialX = enemy.x
+    enemy.update()
+    assert.equal(enemy.intent.desiredX, null)
+    assert.ok(enemy.x > initialX, 'reaching a flank lane resumes the natural patrol direction')
+})
+
+test('live early combat keeps patrols moving while enemies choose independent shots', () => {
+    const { Game } = setup()
+    Game.difficulty = 3
+    Game.configureEnemiesForTest()
+    Game.dt = 0.02
+    const movement = new Map(Object.values(Game.enemies).map(enemy => [enemy.index, {
+        x: enemy.x, y: enemy.y, stationary: 0, maximumStationary: 0
+    }]))
+    for (let frame = 0; frame < 900; frame++) {
+        Game.updateProgression(Game.dt)
+        for (const enemy of Object.values(Game.enemies)) {
+            enemy.update()
+            const state = movement.get(enemy.index)
+            const distance = Math.hypot(enemy.x - state.x, enemy.y - state.y)
+            state.stationary = distance < 0.02 ? state.stationary + 1 : 0
+            state.maximumStationary = Math.max(state.maximumStationary, state.stationary)
+            state.x = enemy.x
+            state.y = enemy.y
+        }
+    }
+    assert.ok(Array.from(movement.values()).every(state => state.maximumStationary < 80),
+        'traffic recovery prevents an invisible wait longer than a readable attack warning')
+    const firingEnemies = Object.values(Game.enemies).filter(enemy => enemy.salvo > 0)
+    assert.ok(firingEnemies.length >= 3,
+        'several enemies select their own credible firing opportunities')
+    assert.ok(firingEnemies.reduce((total, enemy) => total + enemy.salvo, 0) >= 10,
+        'honest targeting still preserves sustained early combat pressure')
+})
+
+test('dense formations commit to traffic maneuvers without per-frame trembling', () => {
+    const { Game, app } = setup()
+    Game.difficulty = 12
+    Game.configureEnemiesForTest()
+    Game.fillEnemySlots(0)
+    Game.advanceSpawnsForTest(15)
+    assert.equal(Object.keys(Game.enemies).length, Game.maxEnemies)
+    Game.dt = 0.02
+    const stats = new Map(Object.values(Game.enemies).map(enemy => [enemy.index, {
+        previousDirection: enemy.movingLeft,
+        directionChanges: 0,
+        startX: enemy.x,
+        previousX: enemy.x,
+        previousY: enemy.y,
+        stationaryFrames: 0,
+        maximumStationaryFrames: 0
+    }]))
+    for (let frame = 0; frame < 600; frame++) {
+        const enemies = Object.values(Game.enemies)
+        for (const enemy of enemies) {
+            enemy.shootInterval = 100000
+            enemy.update()
+            const state = stats.get(enemy.index)
+            if (enemy.movingLeft !== state.previousDirection) {
+                state.directionChanges++
+                state.previousDirection = enemy.movingLeft
+            }
+            const moved = Math.hypot(enemy.x - state.previousX, enemy.y - state.previousY)
+            state.stationaryFrames = moved < 0.02 ? state.stationaryFrames + 1 : 0
+            state.maximumStationaryFrames = Math.max(
+                state.maximumStationaryFrames, state.stationaryFrames)
+            state.previousX = enemy.x
+            state.previousY = enemy.y
+        }
+        for (let left = 0; left < enemies.length; left++) {
+            for (let right = left + 1; right < enemies.length; right++) {
+                assert.equal(app.domain.formation.overlaps(enemies[left], enemies[right],
+                    app.config.progression.enemySeparation - 0.001), false)
+            }
+        }
+    }
+    assert.ok(Array.from(stats.values()).every(state => state.directionChanges < 45),
+        'no ship reverses direction at frame-rate frequency')
+    assert.ok(Array.from(stats.values()).every(state => state.maximumStationaryFrames < 100),
+        'staggered right-of-way eventually releases every blocked ship')
+    assert.ok(Object.values(Game.enemies).some(enemy =>
+        Math.abs(enemy.x - stats.get(enemy.index).startX) > enemy.width),
+    'available ships continue traversing the formation while blocked ships hold steady')
+})
+
 test('incursions begin high, reserve one clear corridor and complete a deep descent and return', () => {
     const { Game, Enemy, app } = setup({ readyEnemies: false })
     Game.waveStage = 'wave'
@@ -1681,7 +2030,8 @@ test('incursions begin high, reserve one clear corridor and complete a deep desc
     assert.ok(Math.max(...positions) - Math.min(...positions) >= 140, 'incursion is substantially deeper than a wave')
     assert.ok(Math.abs(diver.y - diver.homeY) < 1)
     assert.equal(Game.incursion, null, 'return releases the corridor')
-    assert.ok(positions.every(y => y + diver.height <= Game.view.height * app.config.progression.incursionEnemyDepth + 0.000001))
+    const incursionBottom = Game.enemyBounds(true, Game.difficulty).bottom
+    assert.ok(positions.every(y => y + diver.height <= incursionBottom + 0.000001))
 })
 
 test('incursion reservations wait for blockers, freeze during pause and clear on death, resize, boss and restart', () => {

@@ -3,12 +3,13 @@
         const config = Game.config.progression
         const formation = Game.rules.formation
         const stages = Game.rules.WAVE_STAGES
-        const entryPath = (landing, size, occupied) => {
+        const entryPath = (landing, size, occupied, allowedKinds, lateralSide, routeSway) => {
             const margin = config.enemySeparation
-            const sway = Game.config.motion.entrySway
+            const sway = Math.max(0, Number(routeSway) || 0)
+            const lateralEntryActive = occupied.some(other => other.entering && other.entryKind === 'side')
             const routes = [
                 {
-                    start: { x: landing.x, y: -size.height - margin }, seed: 0, sway,
+                    kind: 'top', start: { x: landing.x, y: -size.height - margin }, seed: 0, sway,
                     path: {
                         x: landing.x, y: -size.height - margin,
                         width: size.width + sway,
@@ -16,7 +17,7 @@
                     }
                 },
                 {
-                    start: { x: landing.x, y: -size.height - margin }, seed: 1, sway,
+                    kind: 'top', start: { x: landing.x, y: -size.height - margin }, seed: 1, sway,
                     path: {
                         x: landing.x - sway, y: -size.height - margin,
                         width: size.width + sway,
@@ -24,7 +25,7 @@
                     }
                 },
                 {
-                    start: { x: landing.x, y: -size.height - margin }, seed: 0, sway: 0,
+                    kind: 'top', start: { x: landing.x, y: -size.height - margin }, seed: 0, sway: 0,
                     path: {
                         x: landing.x, y: -size.height - margin,
                         width: size.width,
@@ -32,7 +33,7 @@
                     }
                 },
                 {
-                    start: { x: -size.width - margin, y: landing.y }, seed: 0, sway,
+                    kind: 'side', side: 'left', start: { x: -size.width - margin, y: landing.y }, seed: 0, sway,
                     path: {
                         x: -size.width - margin, y: landing.y,
                         width: landing.x + size.width * 2 + margin + sway,
@@ -40,7 +41,7 @@
                     }
                 },
                 {
-                    start: { x: Game.view.width + margin, y: landing.y }, seed: 1, sway,
+                    kind: 'side', side: 'right', start: { x: Game.view.width + margin, y: landing.y }, seed: 1, sway,
                     path: {
                         x: landing.x - sway,
                         y: landing.y,
@@ -49,15 +50,17 @@
                     }
                 }
             ]
-            return routes.find(route => !occupied.some(other => formation.overlaps(route.path,
-                other.entryPathBounds || other, margin))) || null
+            const availableRoutes = routes.filter(route => allowedKinds.includes(route.kind)
+                && (route.kind !== 'side' || !lateralSide || route.side === lateralSide))
+            return formation.findEntryRoute(availableRoutes, occupied, margin, lateralEntryActive)
         }
         return {
             enemyBounds: function (aggressive = false, level = this.difficulty) {
                 const top = config.enemyTopMargin
                 const height = Game.config.enemySize.height
                 const playerY = this.player ? this.player.y : this.view.height - 70
-                const depth = aggressive ? config.incursionEnemyDepth
+                const depth = aggressive ? Math.min(config.maximumIncursionDepth,
+                    config.incursionEnemyDepth + Math.max(0, level - 2) * config.incursionDepthPerLevel)
                     : level === 1 ? config.initialEnemyDepth : config.normalEnemyDepth
                 // Bound the whole ship, not just its origin. Crowding must not
                 // push the introductory formation into the middle of the screen.
@@ -123,11 +126,34 @@
                 const index = this.pendingSpawns.findIndex(delay => delay === 0)
                 if (index < 0) return
                 const size = Game.config.enemySize
-                const preferredRole = this.rules.enemyRolePreference(this.waveProfile, this.enemyIndex)
+                const preferredRole = this.rules.variedEnemyRolePreference(
+                    this.waveProfile, this.enemyIndex, this.bossCount)
+                const activeRoles = Object.values(this.enemies)
+                    .filter(enemy => !enemy.dead)
+                    .map(enemy => enemy.role)
+                const entryRole = this.rules.canAssignEnemyRole(preferredRole, activeRoles,
+                    this.maxEnemies, config.maxSpecialistsPerRole, config.minimumCommonEnemies)
+                    ? preferredRole : 'pressure'
+                const allowedEntryKinds = this.rules.enemyEntryKindsForRole(this.waveProfile, entryRole)
+                const lateralSide = entryRole === 'aggressor' ? this.nextLateralEntrySide : null
+                const signature = this.rules.enemyArchetypeSignature(entryRole)
+                const routeSway = Game.config.motion.entrySway * signature.entrySwayScale
+                // Preserve the proven formation geometry even when the visible
+                // archetype order is shuffled. Role variety must never consume
+                // or deadlock a landing slot.
+                const placementRole = this.rules.enemyRolePreference(this.waveProfile, this.enemyIndex)
                 const pattern = this.waveProfile.patterns[this.enemyIndex % this.waveProfile.patterns.length]
-                const bounds = this.enemyBounds(['aggressor', 'marksman'].includes(preferredRole) || pattern === 'diver', this.waveProfile.level)
+                const bounds = this.enemyBounds(['aggressor', 'marksman'].includes(placementRole) || pattern === 'diver', this.waveProfile.level)
+                const lateralTravel = Math.min((bounds.right - bounds.left - size.width) / 2,
+                    Math.max(size.width + config.enemySeparation,
+                        this.view.width * Game.config.motion.lateralEntryDepthRatio))
+                const sideLandingX = lateralSide === 'left'
+                    ? bounds.left + lateralTravel
+                    : bounds.right - size.width - lateralTravel
                 const preferred = {
-                    x: this.random(0, Math.max(1, this.view.width - size.width)),
+                    x: entryRole === 'aggressor'
+                        ? sideLandingX
+                        : this.random(0, Math.max(1, this.view.width - size.width)),
                     y: this.random(bounds.top, Math.max(bounds.top + 1, bounds.bottom - size.height + 1))
                 }
                 const occupied = Object.values(this.enemies).filter(enemy => !enemy.dead)
@@ -135,14 +161,14 @@
                 let route = null
                 const landing = formation.findPosition(size, bounds, reservations, preferred,
                     config.enemySeparation, candidate => {
-                        route = entryPath(candidate, size, occupied)
+                        route = entryPath(candidate, size, occupied, allowedEntryKinds, lateralSide, routeSway)
                         return route !== null
                     })
                 // Keep the reservation until a complete landing slot exists.
                 // This prevents two ships from descending into the same place
                 // and leaving the later one visibly suspended at the top.
                 if (!landing) return
-                route = entryPath(landing, size, occupied)
+                route = entryPath(landing, size, occupied, allowedEntryKinds, lateralSide, routeSway)
                 if (!route) return
                 const entrance = { x: route.start.x, y: route.start.y, width: size.width, height: size.height }
                 const entranceOccupied = Object.values(this.enemies).some(enemy => enemy.entering && !enemy.dead
@@ -158,8 +184,13 @@
                     targetY: landing.y,
                     entryMotionSeed: route.seed,
                     entrySway: route.sway,
-                    entryPathBounds: route.path
+                    entryKind: route.kind,
+                    entryPathBounds: route.path,
+                    roleHint: entryRole
                 })
+                if (route.kind === 'side') {
+                    this.nextLateralEntrySide = route.side === 'left' ? 'right' : 'left'
+                }
                 this.spawnCooldown = config.spawnSpacing
                 this.refreshEnemyCount()
             },
@@ -169,7 +200,9 @@
                 for (const enemy of Object.values(this.enemies)) {
                     let position = null
                     if (!enemy.entering) {
-                        position = formation.findPosition(enemy, this.enemyBounds(enemy.pattern === 'diver', enemy.profile.level), placed, enemy, config.enemySeparation)
+                        position = formation.findPosition(enemy,
+                            this.enemyBounds(enemy.pattern === 'diver' || enemy.isAggressor || enemy.isMarksman,
+                                enemy.profile.level), placed, enemy, config.enemySeparation)
                     }
                     if (!position) {
                         enemy.entering = true
@@ -187,6 +220,7 @@
                     if (enemy.entering) {
                         enemy.entryPathBounds = null
                         enemy.entrySway = 0
+                        enemy.entryKind = 'top'
                     }
                     if (enemy.pendingAttack && displaced) {
                         this.releaseFan(enemy)

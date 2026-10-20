@@ -34,6 +34,7 @@
                 Game.playHitSound()
                 Game.invincibleMode(2000)
                 Game.life++
+                Game.recordPlayerDamage?.()
                 Game.shakeTimer = 0.3
             }
             if (Game.life >= Game.maxLives) Game.gameOver()
@@ -48,12 +49,14 @@
             const move   = this.speed * Game.dt * 60
             const movingLeft = Game.input?.isActive('moveLeft') || false
             const movingRight = Game.input?.isActive('moveRight') || false
-            const moving = movingLeft || movingRight
-
             const direction = Number(movingRight) - Number(movingLeft)
-            this.horizontalVelocity = direction * this.speed * 60
+            const previousX = this.x
             this.x += direction * move
             this.x = Math.max(0, Math.min(Game.view.width - this.width, this.x))
+            // Report actual displacement. Holding against an edge is not motion
+            // and must not mislead predictive enemy targeting.
+            this.horizontalVelocity = Game.dt > 0 ? (this.x - previousX) / Game.dt : 0
+            const moving = Math.abs(this.horizontalVelocity) > 0.001
 
             // trail
             if (moving) {
