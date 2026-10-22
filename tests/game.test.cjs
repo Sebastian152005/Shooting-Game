@@ -578,6 +578,9 @@ test('advanced formations combine controller fans with aggressor-only homing', (
     assert.equal(bullets[0].attackType, 'aggressor')
     assert.equal(bullets[0].color, Game.config.enemyAttackColors.aggressor)
     assert.equal(bullets[0].homing, true)
+    assert.equal(Game.activeHomingProjectileCount(), 1)
+    assert.equal(diver.shoot(), false,
+        'the normal-wave homing budget prevents a second active seeker')
     Game.enemyBullets = {}
     Game.difficulty = 8
     Game.configureEnemiesForTest()
@@ -1290,20 +1293,13 @@ test('lateral arrivals travel naturally from outside the viewport before becomin
     assert.notEqual(bullet.color, Game.config.enemyAttackColors.common)
 })
 
-test('common UFOs stay green and straight while aggressors recover tomato and later tracking', () => {
+test('common UFOs keep periodic green pressure while aggressors recover tomato and later tracking', () => {
     const { Game } = setup()
     const enemy = Game.enemies[0]
     enemy.x = 0
     Game.player.x = Game.view.width / 2
     Game.player.movingRight = true
     Game.player.update()
-    assert.equal(enemy.shoot(), false, 'common UFOs wait until memory predicts a useful crossing')
-    assert.equal(Object.keys(Game.enemyBullets).length, 0)
-    Game.player.movingRight = false
-    Game.player.horizontalVelocity = 0
-    enemy.ai.lastKnownTarget = null
-    enemy.observeTarget()
-    enemy.x = Game.player.x + Game.player.width / 2 - enemy.width / 2
     assert.equal(enemy.shoot(), true)
     const common = Object.values(Game.enemyBullets)[0]
     assert.equal(common.vx, 0)
@@ -1350,6 +1346,25 @@ test('common UFOs stay green and straight while aggressors recover tomato and la
     Game.dt = 0.1
     tracking.update()
     assert.ok(initialVelocity >= 0 ? tracking.vx < initialVelocity : tracking.vx > initialVelocity)
+})
+
+test('common UFOs fire when their cooldown is ready without a radar gate', () => {
+    const { Game } = setup()
+    const enemy = Game.enemies[0]
+    enemy.entering = false
+    enemy.speed = 0
+    enemy.x = 0
+    enemy.y = 100
+    Game.player.x = Game.view.width - Game.player.width
+    enemy.shootTimer = enemy.shootInterval
+    Game.dt = 0.05
+
+    enemy.update()
+
+    const bullets = Object.values(Game.enemyBullets)
+    assert.equal(bullets.length, 1)
+    assert.equal(bullets[0].attackType, 'common')
+    assert.equal(bullets[0].vx, 0)
 })
 
 test('specialist quotas survive successive replacements and level reconfiguration', () => {

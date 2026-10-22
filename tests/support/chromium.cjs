@@ -11,10 +11,18 @@ function findBrowserExecutable(environment = process.env, exists = fs.existsSync
         .find(candidate => candidate && exists(candidate))
 }
 
-function browserArguments(profile, width = 1280, height = 720) {
+function browserArguments(profile, width = 1280, height = 720, options = {}) {
     if (!path.isAbsolute(profile)) throw Error('Chromium profile path must be absolute')
     return [
         '--headless=new',
+        ...(options.softwareCanvas ? [
+            // Some managed Windows environments expose a broken GPU process
+            // even in headless mode. Canvas rendering remains covered by
+            // software for the browser smoke check.
+            '--disable-gpu', '--use-angle=swiftshader', '--disable-gpu-sandbox',
+            '--in-process-gpu'
+        ] : []),
+        ...(options.disableSandbox ? ['--no-sandbox'] : []),
         '--disable-background-networking',
         // Headless rendering does not need Graphite. Disabling it also avoids
         // Dawn's persistent GPU cache, which can be unavailable in sandboxes.

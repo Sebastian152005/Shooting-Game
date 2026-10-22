@@ -30,7 +30,8 @@ async function main() {
     const origin = 'http://127.0.0.1:' + server.address().port
     const temporaryRoot = path.resolve(os.tmpdir())
     const profile = fs.mkdtempSync(path.join(temporaryRoot, 'shooting-game-browser-'))
-    const browser = spawn(executable, browserArguments(profile), { windowsHide: true })
+    const browser = spawn(executable, browserArguments(profile, 1280, 720,
+        { disableSandbox: true, softwareCanvas: true }), { windowsHide: true })
     const screenshots = new Map()
     writeReport('running')
     let socket
@@ -165,12 +166,10 @@ async function main() {
             const e = Object.values(g.enemies).find(e => !e.entering && e.role === 'pressure');
             g.enemyBullets = {}; g.safeCorridor = null;
             e.x = 0; g.player.x = g.view.width / 2;
-            const rejectedOutsideRadar = !e.shoot() && Object.keys(g.enemyBullets).length === 0;
-            e.x = g.player.x + g.player.width / 2 - e.width / 2;
             const fired = e.shoot(); const bullet = Object.values(g.enemyBullets)[0];
-            return rejectedOutsideRadar && fired && bullet.vx === 0 && !bullet.homing
+            return fired && bullet.vx === 0 && !bullet.homing
                 && bullet.attackType === 'common' && bullet.color === g.config.enemyAttackColors.common;
-        })()`), true, 'common UFOs predict a useful crossing before firing straight green lasers')
+        })()`), true, 'common UFOs keep periodic straight green pressure without a radar gate')
         const precisionState = await evaluate(`(() => { const g = window.ShootingGame.game;
             g.difficulty = 4; g.applyWaveProfile(); g.safeCorridor = null; g.enemyAttackCooldown = 0;
             for (const e of Object.values(g.enemies)) { e.pendingAttack = null; e.shootTimer = 0; }

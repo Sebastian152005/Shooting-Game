@@ -64,6 +64,7 @@
                 maxSpecialistsPerRole: 2, minimumCommonEnemies: 2,
                 precisionMinimumLead: 0.25, precisionMaximumLead: 0.45,
                 homingDuration: 0.95, homingTurnRate: 4.2, homingMaxLateralSpeed: 2.25,
+                maxActiveHomingProjectiles: 1,
                 fanWarning: 0.8, fanGapWidth: 150, fanGapPadding: 24,
                 fanEdgeMargin: 28, fanShift: 115, maxBulletHeight: 46
             }),

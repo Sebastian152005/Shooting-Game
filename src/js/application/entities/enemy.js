@@ -300,10 +300,10 @@
                 this.setAIState(Game.rules.ENEMY_AI_STATES.WARNING)
                 return true
             }
-            // The green UFO keeps a straight, readable laser. Its short memory
-            // estimates a crossing from observed movement rather than testing a
-            // fixed lane, so patrol and firing remain independent.
-            if (!this.canFireStraightShot(rememberedTarget)) return false
+            // Common UFOs provide the steady arcade rhythm: they fire a clear,
+            // vertical laser on cooldown instead of silently waiting for a
+            // predicted crossing. Prediction remains reserved for specialists,
+            // where the warning makes the intent legible to the player.
             const bullets = Game.fireEnemyVolley(x, y, this.bulletSpeed,
                 Game.config.enemyAttackColors.common, [0], null, 'common')
             if (!bullets.length) return false

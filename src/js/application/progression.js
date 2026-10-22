@@ -149,8 +149,16 @@
                 this.offerBossRewards?.()
             },
 
+            activeHomingProjectileCount: function () {
+                return Object.values(this.enemyBullets).filter(bullet => bullet.homing
+                    && bullet.homingFor > 0).length
+            },
+
             canPrepareEnemyAttack: function (actor, attackKind = null) {
                 const intensity = this.currentCombatIntensity()
+                const activeHoming = attackKind === 'tracking'
+                    ? this.activeHomingProjectileCount()
+                    : 0
                 const conflicting = actor && attackKind && this.rules.hasSpecialAttackConflict(
                     { kind: attackKind, x: actor.x + actor.width / 2 },
                     Object.values(this.enemies).filter(enemy => enemy !== actor && enemy.pendingAttack && !enemy.dead)
@@ -159,6 +167,8 @@
                 const available = [stages.WAVE, stages.BOSS_PENDING].includes(this.waveStage) && !this.paused && !this.isGameOver
                     && !this.safeCorridor
                     && this.enemyAttackCooldown === 0
+                    && (attackKind !== 'tracking' || activeHoming
+                        < Game.config.progression.maxActiveHomingProjectiles)
                     && !conflicting
                     && Object.values(this.enemies).filter(enemy => enemy.pendingAttack && !enemy.dead).length
                         < intensity.specialAttackLimit

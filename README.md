@@ -61,7 +61,7 @@ npm run check
 npm run test:browser
 ```
 
-`npm test` ejecuta 115 pruebas de juego, sesión, entrada, progresión, eventos ambientales, módulos, estructura y servidor. `check` comprueba sintaxis, recursos y el grafo ESM. El ensayo de navegador utiliza Chrome o Edge instalado; `CHROME_PATH` permite indicar otro ejecutable Chromium. No usa paquetes externos. Publica las capturas únicamente después de completar el recorrido y guarda el estado de la última ejecución en `tests/artifacts/browser-smoke-report.json`; estos artefactos están excluidos de Git.
+`npm test` ejecuta 134 pruebas de juego, sesión, entrada, progresión, eventos ambientales, módulos, estructura y servidor. `check` comprueba sintaxis, recursos y el grafo ESM. El ensayo de navegador utiliza Chrome o Edge instalado; `CHROME_PATH` permite indicar otro ejecutable Chromium. No usa paquetes externos. Publica las capturas únicamente después de completar el recorrido y guarda el estado de la última ejecución en `tests/artifacts/browser-smoke-report.json`; estos artefactos están excluidos de Git.
 
 Las pruebas cubren casos concretos y no certifican ausencia absoluta de errores ni sustituyen partidas de evaluación.
 

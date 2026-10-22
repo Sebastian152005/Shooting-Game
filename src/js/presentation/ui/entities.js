@@ -175,6 +175,24 @@
                     ctx.lineTo(attack.x + Math.tan(angle) * (Game.view.height - attack.y), Game.view.height)
                     ctx.stroke()
                 }
+            } else if (tracking) {
+                // A tracking projectile still commits to its launch after the
+                // warning. Mark the observed target so the later steering is
+                // readable without drawing a misleading fixed trajectory.
+                ctx.globalAlpha = 0.5
+                ctx.shadowBlur = 0
+                ctx.lineWidth = 1.2
+                ctx.setLineDash([4, 7])
+                ctx.beginPath()
+                ctx.arc(attack.targetX, attack.targetY, 11 + progress * 4, 0, Math.PI * 2)
+                ctx.stroke()
+                ctx.setLineDash([])
+                ctx.beginPath()
+                ctx.moveTo(attack.targetX - 16, attack.targetY)
+                ctx.lineTo(attack.targetX + 16, attack.targetY)
+                ctx.moveTo(attack.targetX, attack.targetY - 16)
+                ctx.lineTo(attack.targetX, attack.targetY + 16)
+                ctx.stroke()
             } else if (aimed) {
                 ctx.globalAlpha = 0.45
                 ctx.shadowBlur = 0

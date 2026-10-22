@@ -21,6 +21,8 @@ test('browser runner uses an isolated profile and reports infrastructure failure
     assert.ok(args.includes('--user-data-dir=' + profile))
     assert.ok(args.includes('--window-size=800,600'))
     assert.equal(args.includes('--no-sandbox'), false)
+    assert.ok(browserArguments(profile, 800, 600, { disableSandbox: true }).includes('--no-sandbox'))
+    assert.ok(browserArguments(profile, 800, 600, { softwareCanvas: true }).includes('--disable-gpu'))
     assert.equal(findBrowserExecutable({ CHROME_PATH: 'custom-browser' }, candidate => candidate === 'custom-browser'), 'custom-browser')
     assert.match(browserDiagnostics('DawnGraphiteCache\nGPU process isn\'t usable'), /before the game page loaded/)
 })
